@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+tmp/
+
+# local Claude Code config — real API key + machine/infra specifics, never publish
+.claude/
+
+# Karpenter node manifests — cluster/account-specific infra, not for publishing
+*nodeclass*.yaml
+*nodepool*.yaml
+training/train/pt-na-gpu.yaml

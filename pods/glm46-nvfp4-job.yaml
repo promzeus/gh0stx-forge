@@ -1,0 +1,78 @@
+# [3] QUANT for GLM-4.6: NVFP4 W4A4 glm46-PRUNED (151B) -> glm46-nvfp4 (~85GB).
+# p4d.24xlarge (glm-quant nodepool): model loads CPU-resident (710GB bf16), oneshot onloads one
+# decoder block at a time to an A100-40 for calibration. NVFP4 checkpoint is produced in software,
+# so A100 (sm_80) is fine; only SERVING FP4 GEMM needs GB10 sm_121a.
+# Dry run (4 samples) first to catch a glm4_moe/llmcompressor mismatch fast, then delete it and run
+# full (512). Self-terminates via external `kubectl delete job` + nodepool consolidation.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glm46-nvfp4
+  namespace: distill
+spec:
+  backoffLimit: 3                   # auto-retry on p4d spot reclaim (RESUME guard skips if _NVFP4_COMPLETE)
+  activeDeadlineSeconds: 25200
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels: { app: glm46-nvfp4 }
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector:
+        workload: glm-quant
+      tolerations:
+        - { key: glm-quant, effect: NoSchedule, operator: Exists }
+        - { key: nvidia.com/gpu, effect: NoSchedule, operator: Exists }
+        - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+      containers:
+        - name: nvfp4
+          image: vllm/vllm-openai:latest
+          command: ["/bin/bash","-lc"]
+          args:
+            - |
+              set -uo pipefail
+              B=ai-monitoring-test-123456789012
+              echo "[job] deps $(date -u)"
+              python3 -m pip install -q -U llmcompressor==0.14.0 accelerate datasets safetensors huggingface_hub hf_xet sentencepiece tiktoken blobfile awscli 2>&1 | tail -2 || true
+              python3 -m pip install -q -U transformers 2>&1 | tail -1 || true
+              export HF_HOME=/data/.hf TMPDIR=/data/tmp PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+              mkdir -p /data/abl /data/nvfp4 /data/scripts /data/tmp /data/.hf && cd /data/scripts
+              aws s3 cp s3://$B/glm46/nvfp4_quant.py ./nvfp4_quant.py
+              if aws s3 ls s3://$B/glm46-nvfp4/_NVFP4_COMPLETE >/dev/null 2>&1; then
+                echo "[job] === RESUME: glm46-nvfp4 already in S3 ==="; echo "[job] === GLM46_NVFP4_DONE $(date -u) ==="; sleep 30; exit 0
+              fi
+              echo "[job] pull glm46-abliterated $(date -u)"
+              aws s3 sync s3://$B/glm46-pruned/ /data/abl/ --no-progress 2>&1 | tail -1
+              test -f /data/abl/config.json || { echo "[job] FATAL: abliterated config.json missing"; exit 1; }
+              nvidia-smi -L 2>&1 | head -1 || true
+              echo "[job] === NVFP4 DRY (4 samples) $(date -u) ==="
+              NVFP4_IN=/data/abl NVFP4_OUT=/data/nvfp4_dry NVFP4_SAMPLES=4 NVFP4_MAXSEQ=1024 python3 nvfp4_quant.py; drc=$?
+              if [ $drc -ne 0 ]; then echo "[job] NVFP4_DRY_FAILED rc=$drc"; sleep 5; exit $drc; fi
+              rm -rf /data/nvfp4_dry
+              echo "[job] === NVFP4 FULL (512 samples) $(date -u) ==="
+              NVFP4_IN=/data/abl NVFP4_OUT=/data/nvfp4 NVFP4_SAMPLES=512 python3 nvfp4_quant.py; frc=$?
+              if [ $frc -ne 0 ]; then echo "[job] NVFP4_FULL_FAILED rc=$frc"; sleep 5; exit $frc; fi
+              echo "[job] output size:"; du -sh /data/nvfp4
+              echo "[job] === PUSH glm46-nvfp4 -> S3 $(date -u) ==="
+              aws s3 sync /data/nvfp4 s3://$B/glm46-nvfp4/ --no-progress 2>&1 | tail -2
+              echo ok | aws s3 cp - s3://$B/glm46-nvfp4/_NVFP4_COMPLETE
+              echo "[job] === GLM46_NVFP4_DONE $(date -u) ==="
+          env:
+            - { name: AWS_REGION, value: "eu-north-1" }
+            - { name: HF_HOME, value: "/data/.hf" }
+            - { name: TMPDIR, value: "/data/tmp" }
+            - { name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True" }
+          resources:
+            requests: { cpu: "48", memory: 900Gi, nvidia.com/gpu: 1 }
+            limits: { nvidia.com/gpu: 1 }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: dshm, mountPath: /dev/shm }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 950Gi }
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 16Gi }

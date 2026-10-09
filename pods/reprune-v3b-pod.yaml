@@ -1,0 +1,61 @@
+# ДИАГНОСТИКА: KEEP_FRAC 0.36 (=v2) с importance_v3 (тот же корпус). Phase A ПРОПУСК (reuse importance).
+# Если MATH восстановится → виноват был счёт (0.29). Если нет → корпус/домены.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reprune-v3b
+  namespace: distill
+  labels: { app: reprune-v3b }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: prune
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/reprune_v3b.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli datasets 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          mkdir -p /work/corpus && cd /work
+          aws s3 cp s3://$B/heal/pipeline_reap.py . >/dev/null
+          aws s3 cp s3://$B/heal/calib_corpus.py . >/dev/null
+          # переиспользуем importance_v3 как v3b → Phase A пропускается
+          if [ ! -f /pv/run397b_v3/importance_v3b.json ]; then
+            cp /pv/run397b_v3/importance_v3.json /pv/run397b_v3/importance_v3b.json && echo "[pod] importance_v3 -> v3b (reuse, Phase A skip)"
+          fi
+          ls -la /pv/run397b_v3/importance_v3*.json
+          echo "[pod] ===== RE-PRUNE v3b (KEEP_FRAC 0.36 =v2, reuse importance) ====="
+          MODEL_ID=/pv/397b OUT_DIR=/pv/run397b_v3 DEVICE_MAP=cpu CORPUS_DIR=/work/corpus \
+            PRUNE_VER=v3b CALIB_TARGET=1024 MAXLEN=2048 USE_HF=1 KEEP_FRAC=0.36 \
+            python3 pipeline_reap.py 2>&1 | grep -vE "it/s\]"
+          echo "[pod] ===== save pruned_v3b -> S3 ====="
+          aws s3 sync /pv/run397b_v3/pruned_v3b/ s3://$B/pruned_v3b/ --no-progress 2>&1 | tail -1
+          aws s3 cp /pv/run397b_v3/prune_result_v3b.json s3://$B/pruned_v3b_result.json 2>&1 | tail -1 || true
+          echo "[pod] ===== REPRUNE_V3B_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "80", memory: 1400Gi }
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 60Gi }

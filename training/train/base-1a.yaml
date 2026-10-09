@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gh0stx-base-1a
+  namespace: distill
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3-retain
+  resources: {requests: {storage: 340Gi}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gh0stx-base-sync
+  namespace: distill
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {topology.kubernetes.io/zone: eu-north-1a}
+      containers:
+      - name: sync
+        image: public.ecr.aws/aws-cli/aws-cli:latest
+        command: ["bash","-lc"]
+        args:
+        - |
+          set -e
+          mkdir -p /base
+          echo "syncing decensored_v4 (282GB) -> PVC ..."
+          aws s3 sync s3://ai-monitoring-test-123456789012/decensored_v4/ /base/ --only-show-errors
+          echo "shards:"; ls /base/*.safetensors 2>/dev/null | wc -l
+          test -f /base/model.safetensors.index.json && echo "index OK"
+          du -sh /base
+          echo SYNC_DONE
+        volumeMounts:
+        - {name: base, mountPath: /base}
+        resources:
+          requests: {cpu: "4", memory: 8Gi}
+      volumes:
+      - name: base
+        persistentVolumeClaim: {claimName: gh0stx-base-1a}

@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reprune-v3
+  namespace: distill
+  labels: { app: reprune-v3 }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"   # длинная задача — не давать Karpenter убить
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c    # PVC AZ
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: prune
+      image: vllm/vllm-openai:latest       # x86 CPU-only (device_map=cpu), torch+transformers
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          mkdir -p /pv 2>/dev/null || true
+          exec > >(tee -a /pv/reprune_v3.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli datasets 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          mkdir -p /work/corpus && cd /work
+          aws s3 cp s3://$B/heal/pipeline_reap.py . >/dev/null
+          aws s3 cp s3://$B/heal/calib_corpus.py . >/dev/null
+          echo "[pod] fetch corpus (offsec 26560 + crypto 75) -> /work/corpus"
+          aws s3 cp s3://$B/corpus/corpus_offsec.json /work/corpus/ >/dev/null
+          aws s3 cp s3://$B/corpus/corpus_crypto.json /work/corpus/ >/dev/null
+          echo "[pod] corpus sizes:"; ls -la /work/corpus
+          # 397b source: на PVC уже есть (~857GB); sync = инкрементальный no-op
+          if [ ! -f /pv/397b/config.json ]; then
+            echo "[pod] 397b not on PVC -> sync from S3 (806GB)..."; mkdir -p /pv/397b
+            aws s3 sync s3://$B/qwen3.5-397b-bf16/ /pv/397b/ --no-progress 2>&1 | tail -1
+          fi
+          echo "[pod] 397b size:"; du -sh /pv/397b 2>/dev/null
+          echo "[pod] free PVC space (decensored_v2/v3 есть в S3, суперседнуты; pruned_v2 оставляем fallback)"
+          # НЕ трогаем /pv/run397b_v3 — там importance_v3.json (Phase A resume, 6ч!)
+          rm -rf /pv/run397b_v2/decensored_v2 /pv/run397b_v2/decensored_v3 2>/dev/null || true
+          echo "[pod] PVC free:"; df -h /pv | tail -1
+          echo "[pod] ===== RE-PRUNE v3 (KEEP_FRAC 0.29, offsec-heavy pool, crypto) ====="
+          # CORPUS_DIR=/work/corpus → calib_corpus._load_pool найдёт пулы. CALIB_TARGET=1024 → offsec ~266,
+          # crypto 75, остальные по долям (см. calib_corpus CORES). MAXLEN 2048 = длинные offsec-примеры.
+          MODEL_ID=/pv/397b OUT_DIR=/pv/run397b_v3 DEVICE_MAP=cpu CORPUS_DIR=/work/corpus \
+            PRUNE_VER=v3 CALIB_TARGET=1024 MAXLEN=2048 USE_HF=1 KEEP_FRAC=0.29 \
+            stdbuf -oL -eL python3 pipeline_reap.py 2>&1 | stdbuf -oL grep --line-buffered -vE "it/s\]"
+          prc=${PIPESTATUS[0]}
+          echo "[pod] pipeline_reap rc=$prc"
+          if [ "$prc" -ne 0 ] || [ ! -f /pv/run397b_v3/pruned_v3/config.json ]; then
+            echo "[pod] PRUNE FAILED (rc=$prc, нет pruned_v3/config.json) — НЕ сохраняю, оставляю importance для resume"; sleep 5; exit 1
+          fi
+          echo "[pod] ===== save pruned_v3 -> S3 ====="
+          aws s3 sync /pv/run397b_v3/pruned_v3/ s3://$B/pruned_v3/ --no-progress 2>&1 | tail -1
+          aws s3 cp /pv/run397b_v3/importance_v3.json s3://$B/pruned_v3_importance.json 2>&1 | tail -1 || true
+          aws s3 cp /pv/run397b_v3/prune_result_v3.json s3://$B/pruned_v3_result.json 2>&1 | tail -1 || true
+          echo "[pod] ===== REPRUNE_V3_DONE $(date -u) ====="
+          sleep 600
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "80", memory: 1400Gi }   # r7i.48xlarge (1.5TB, 1c); do-not-disrupt; tee->PVC
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 60Gi }

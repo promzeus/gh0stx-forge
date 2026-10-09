@@ -1,0 +1,331 @@
+CACHE_DIR  := /home/gh0stx/models/vllm-cache
+CONTAINER  := aeon-vllm
+MODEL      := aeon-ultimate
+API_BASE   := http://localhost:8001/v1
+
+AEON_DIR     := /home/gh0stx/models/aeon-model-xs
+AEON_DRAFT   := /home/gh0stx/models/aeon-drafter
+AEON_IMG     := ghcr.io/aeon-7/aeon-vllm-ultimate:latest
+AEON_SPEC    := {"method":"dflash","model":"/models/dflash-drafter","num_speculative_tokens":12}
+
+# === HERETIC 35B MoE A3B NVFP4 (~83-118 tok/s) ===
+HERETIC_DIR   := /home/gh0stx/models/qwen36-35b-heretic
+HERETIC_DRAFT := /home/gh0stx/models/heretic-drafter
+HERETIC_IMG   := ghcr.io/aeon-7/aeon-vllm-ultimate:latest
+HERETIC_SPEC  := {"method":"dflash","model":"/models/heretic-drafter","num_speculative_tokens":15}
+
+# === WhiteRabbitNeo-33B (security/DevSecOps, uncensored, 16k ctx, ngram) ===
+WRN_DIR  := /home/gh0stx/models/whiterabbitneo-33b
+WRN_IMG  := ghcr.io/aeon-7/aeon-vllm-ultimate:latest
+WRN_SPEC := {"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}
+
+# === Qwen3-Coder-30B-A3B abliterated (agent/security, MoE ~40t/s, 256k, DFlash) ===
+QWEN_DIR   := /home/gh0stx/models/qwen3coder-30b-sec
+QWEN_DRAFT := /home/gh0stx/models/qwen3coder-30b-dflash
+QWEN_IMG   := ghcr.io/aeon-7/aeon-vllm-ultimate:latest
+QWEN_SPEC  := {"method":"dflash","model":"/models/qwen3-dflash","num_speculative_tokens":15}
+
+# === HERETIC122 = Qwen3.5-122B-A10B-heretic (NVFP4, MoE 10B-active, uncensored, reasoning+VL, 200k) — CURRENT MAIN ===
+H122_DIR   := /home/gh0stx/models/qwen35-122b-heretic
+H122_DRAFT := /home/gh0stx/models/qwen35-122b-dflash
+H122_IMG   := ghcr.io/aeon-7/aeon-vllm-ultimate:latest
+H122_SPEC  := {"method":"dflash","model":"/models/draft","num_speculative_tokens":15}
+
+.DEFAULT_GOAL := help
+.PHONY: help start start-heretic heretic122 wrn secagent stop comfy asr tts ttsui audio-stop logs status test shell chat agent ai cmd dflash stop-dflash
+
+help:
+	@echo ""
+	@echo "  make start          — AI режим: AEON 27B + WebUI + proxy"
+	@echo "  make start-heretic  — AI режим: Heretic 35B + WebUI + proxy"
+	@echo "  make heretic122     — ГЛАВНАЯ: Qwen3.5-122B-A10B heretic (NVFP4, 200k, DFlash) + proxy :8001"
+	@echo "  make wrn            — WhiteRabbitNeo 33B (security, uncensored) + WebUI"
+	@echo "  make secagent       — Qwen3-Coder-30B agent (uncensored, 256k, DFlash) + WebUI"
+	@echo "  make comfy   — Медиа режим: ComfyUI :8188"
+	@echo "  make stop    — Остановить всё"
+	@echo "  make status  — Что запущено + GPU"
+	@echo "  make logs    — Логи AEON"
+	@echo "  make chat    — Чат в терминале"
+	@echo "  make agent   — AI агент с bash"
+	@echo "  make cmd     — Одна команда через AI"
+	@echo "  make test    — Тест API"
+	@echo "  make shell   — Войти в контейнер AEON"
+	@echo ""
+
+# ── AI режим: AEON + WebUI + proxy ──────────────────────────────────────────
+start:
+	@pgrep -f "ComfyUI/main.py" -l 2>/dev/null | grep -v make | grep -q "main.py" && \
+	  echo "⚠ ComfyUI is running — do 'make stop' first" && exit 1 || true
+	@echo "Starting AI mode..."
+	mkdir -p $(CACHE_DIR)
+	sudo docker run -d --gpus all --ipc=host --network=host \
+	  -e TORCH_CUDA_ARCH_LIST="12.1a" \
+	  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	  -e ENABLE_NVFP4_SM100=0 \
+	  -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+	  -e VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass \
+	  -e NVIDIA_FORWARD_COMPAT=1 \
+	  -v $(AEON_DIR):/models/aeon-mtp-xs \
+	  -v $(AEON_DRAFT):/models/dflash-drafter \
+	  -v $(CACHE_DIR):/root/.cache/vllm \
+	  --name $(CONTAINER) \
+	  --restart unless-stopped \
+	  --entrypoint vllm \
+	  $(AEON_IMG) \
+	  serve /models/aeon-mtp-xs \
+	    --served-model-name aeon-ultimate \
+	    --host 0.0.0.0 --port 8000 \
+	    --quantization modelopt \
+	    --mamba-cache-dtype float16 \
+	    --mamba-block-size 256 \
+	    --reasoning-parser qwen3 \
+	    --tool-call-parser qwen3_coder \
+	    --enable-auto-tool-choice \
+	    --limit-mm-per-prompt '{"image": 4, "video": 2}' \
+	    --mm-encoder-tp-mode data \
+	    --mm-processor-cache-type shm \
+	    --max-num-seqs 16 \
+	    --max-num-batched-tokens 16384 \
+	    --gpu-memory-utilization 0.75 \
+	    --enable-chunked-prefill \
+	    --enable-prefix-caching \
+	    --trust-remote-code \
+	    --max-model-len 200000 \
+	    --speculative-config '$(AEON_SPEC)'
+	sudo docker start open-webui 2>/dev/null || \
+	  sudo docker run -d --network=host --restart unless-stopped \
+	    --name open-webui \
+	    -v ~/open-webui:/app/backend/data \
+	    -e OPENAI_API_BASE_URL=http://localhost:8000/v1 \
+	    -e OPENAI_API_KEY=dummy \
+	    -e WEBUI_AUTH=false \
+	    ghcr.io/open-webui/open-webui:main
+	pgrep -f proxy.py > /dev/null || nohup python3 ~/proxy.py > /tmp/proxy.log 2>&1 &
+	@echo "AI mode ready: http://$(shell hostname -I | awk '{print $$1}'):8080"
+
+# ── Heretic 35B MoE ─────────────────────────────────────────────────────────
+start-heretic:
+	@pgrep -f "ComfyUI/main.py" -l 2>/dev/null | grep -v make | grep -q "main.py" && \
+	  echo "⚠ ComfyUI is running — do 'make stop' first" && exit 1 || true
+	@echo "Starting Heretic 35B mode..."
+	mkdir -p $(CACHE_DIR)
+	sudo docker run -d --gpus all --ipc=host --network=host \
+	  -e TORCH_CUDA_ARCH_LIST="12.0+PTX" \
+	  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	  -v $(HERETIC_DIR):/models/heretic \
+	  -v $(HERETIC_DRAFT):/models/heretic-drafter \
+	  -v $(CACHE_DIR):/root/.cache/vllm \
+	  --name $(CONTAINER) \
+	  --restart unless-stopped \
+	  --entrypoint python3 \
+	  $(HERETIC_IMG) \
+	  -m vllm.entrypoints.openai.api_server \
+	    --model /models/heretic \
+	    --served-model-name heretic aeon-ultimate \
+	    --host 0.0.0.0 --port 8000 \
+	    --quantization compressed-tensors \
+	    --trust-remote-code \
+	    --enforce-eager \
+	    --limit-mm-per-prompt '{"image": 0, "video": 0}' \
+	    --max-model-len 100000 \
+	    --max-num-seqs 32 \
+	    --max-num-batched-tokens 32768 \
+	    --gpu-memory-utilization 0.85 \
+	    --enable-chunked-prefill \
+	    --enable-prefix-caching \
+	    --reasoning-parser qwen3 \
+	    --tool-call-parser qwen3_coder \
+	    --enable-auto-tool-choice \
+	    --attention-backend flash_attn \
+	    --speculative-config '$(HERETIC_SPEC)'
+	sudo docker start open-webui 2>/dev/null || sudo docker run -d --network=host --restart unless-stopped --name open-webui -v ~/open-webui:/app/backend/data -e OPENAI_API_BASE_URL=http://localhost:8000/v1 -e OPENAI_API_KEY=dummy -e WEBUI_AUTH=false ghcr.io/open-webui/open-webui:main
+	pgrep -f proxy.py > /dev/null || nohup python3 ~/proxy.py > /tmp/proxy.log 2>&1 &
+	@echo "Heretic 35B ready: http://$(shell hostname -I | awk '{print $$1}'):8080"
+
+# ── WhiteRabbitNeo 33B (security / DevSecOps, uncensored, 16k, ngram) ────────
+wrn:
+	@pgrep -f "[C]omfyUI/main.py" >/dev/null && echo "⚠ ComfyUI is running — do 'make stop' first" && exit 1 || true
+	@echo "Starting WhiteRabbitNeo 33B (frees GPU from other models)..."
+	-sudo docker rm -f aeon-vllm vllm-ab wrn-vllm >/dev/null 2>&1 || true
+	mkdir -p $(CACHE_DIR)
+	sudo docker run -d --gpus all --ipc=host --network=host \
+	  -e TORCH_CUDA_ARCH_LIST="12.0+PTX" \
+	  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	  -v $(WRN_DIR):/models/wrn \
+	  -v $(CACHE_DIR):/root/.cache/vllm \
+	  --name wrn-vllm \
+	  --restart unless-stopped \
+	  --entrypoint python3 \
+	  $(WRN_IMG) \
+	  -m vllm.entrypoints.openai.api_server \
+	    --model /models/wrn \
+	    --served-model-name whiterabbitneo \
+	    --host 0.0.0.0 --port 8000 \
+	    --trust-remote-code \
+	    --enforce-eager \
+	    --chat-template /models/wrn/wrn_chat.jinja \
+	    --max-model-len 16384 \
+	    --max-num-seqs 8 \
+	    --gpu-memory-utilization 0.85 \
+	    --enable-chunked-prefill \
+	    --enable-prefix-caching \
+	    --attention-backend flash_attn \
+	    --speculative-config '$(WRN_SPEC)'
+	sudo docker start open-webui 2>/dev/null || sudo docker run -d --network=host --restart unless-stopped --name open-webui -v ~/open-webui:/app/backend/data -e OPENAI_API_BASE_URL=http://localhost:8000/v1 -e OPENAI_API_KEY=dummy -e WEBUI_AUTH=false ghcr.io/open-webui/open-webui:main
+	@echo "WhiteRabbitNeo ready: WebUI http://$(shell hostname -I | awk '{print $$1}'):8080 | Cline → http://<ip>:8000/v1  model=whiterabbitneo (NO proxy)"
+
+# ── Qwen3-Coder-30B agent (abliterated, MoE, 256k, DFlash) ──────────────────
+secagent:
+	@pgrep -f "[C]omfyUI/main.py" >/dev/null && echo "⚠ ComfyUI is running — do 'make stop' first" && exit 1 || true
+	@echo "Starting Qwen3-Coder-30B agent (abliterated, DFlash, 128k)..."
+	-sudo docker rm -f aeon-vllm vllm-ab wrn-vllm secagent-vllm >/dev/null 2>&1 || true
+	mkdir -p $(CACHE_DIR)
+	sudo docker run -d --gpus all --ipc=host --network=host \
+	  -e TORCH_CUDA_ARCH_LIST="12.0+PTX" \
+	  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	  -v $(QWEN_DIR):/models/qwen3 \
+	  -v $(QWEN_DRAFT):/models/qwen3-dflash \
+	  -v $(CACHE_DIR):/root/.cache/vllm \
+	  --name secagent-vllm \
+	  --restart unless-stopped \
+	  --entrypoint python3 \
+	  $(QWEN_IMG) \
+	  -m vllm.entrypoints.openai.api_server \
+	    --model /models/qwen3 \
+	    --served-model-name qwen3coder \
+	    --host 0.0.0.0 --port 8000 \
+	    --trust-remote-code \
+	    --enforce-eager \
+	    --max-model-len 65536 \
+	    --max-num-seqs 4 \
+	    --gpu-memory-utilization 0.85 \
+	    --enable-chunked-prefill \
+	    --enable-prefix-caching \
+	    --attention-backend flash_attn
+	sudo docker start open-webui 2>/dev/null || sudo docker run -d --network=host --restart unless-stopped --name open-webui -v ~/open-webui:/app/backend/data -e OPENAI_API_BASE_URL=http://localhost:8000/v1 -e OPENAI_API_KEY=dummy -e WEBUI_AUTH=false ghcr.io/open-webui/open-webui:main
+	@echo "Qwen3-Coder agent ready: WebUI http://$(shell hostname -I | awk '{print $$1}'):8080 | Cline → http://<ip>:8000/v1  model=qwen3coder"
+
+# ── HERETIC122 = Qwen3.5-122B-A10B heretic (NVFP4, 200k, DFlash) — CURRENT MAIN ──
+heretic122:
+	@pgrep -f "[C]omfyUI/main.py" >/dev/null && echo "⚠ ComfyUI is running — do 'make stop' first" && exit 1 || true
+	@echo "Starting heretic122 (Qwen3.5-122B-A10B, NVFP4, 200k, DFlash)..."
+	-sudo docker rm -f aeon-vllm wrn-vllm vllm-ab secagent-vllm heretic122 >/dev/null 2>&1 || true
+	mkdir -p $(CACHE_DIR)
+	sudo docker run -d --gpus all --ipc=host --network=host \
+	  -e TORCH_CUDA_ARCH_LIST="12.0+PTX" \
+	  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+	  -v $(H122_DIR):/models/h122 \
+	  -v $(H122_DRAFT):/models/draft \
+	  -v $(CACHE_DIR):/root/.cache/vllm \
+	  --name heretic122 \
+	  --restart unless-stopped \
+	  --entrypoint python3 \
+	  $(H122_IMG) \
+	  -m vllm.entrypoints.openai.api_server \
+	    --model /models/h122 \
+	    --served-model-name heretic122 \
+	    --host 0.0.0.0 --port 8000 \
+	    --trust-remote-code \
+	    --reasoning-parser qwen3 \
+	    --reasoning-config '{}' \
+	    --enable-auto-tool-choice \
+	    --tool-call-parser qwen3_coder \
+	    --max-model-len 200000 \
+	    --max-num-seqs 1 \
+	    --max-num-batched-tokens 4096 \
+	    --gpu-memory-utilization 0.78 \
+	    --enable-chunked-prefill \
+	    --enable-prefix-caching \
+	    --attention-backend flash_attn \
+	    --speculative-config '$(H122_SPEC)'
+	pgrep -f "[p]roxy.py" > /dev/null || nohup python3 ~/proxy.py > /tmp/proxy.log 2>&1 &
+	@echo "heretic122 ready :8000 (model=heretic122) | proxy :8001 (thinking-off, для Cline/чата) | Paperclip → /v1/messages на :8000 (без proxy)"
+
+# ── Медиа режим: ComfyUI ────────────────────────────────────────────────────
+comfy:
+	@sudo docker ps --format "{{.Names}}" | grep -q $(CONTAINER) && \
+	  echo "⚠ AEON is running — do 'make stop' first" && exit 1 || true
+	@echo "ComfyUI: http://$(shell hostname -I | awk '{print $$1}'):8188"
+	cd ~/ComfyUI && python3 main.py --listen 0.0.0.0 --port 8188 --highvram --bf16-unet
+
+# ── Стоп всего ───────────────────────────────────────────────────────────────
+stop:
+	@for c in vllm-dflash aeon-vllm wrn-vllm vllm-ab secagent-vllm heretic122 qwen3-asr faster-qwen3-tts; do sudo docker rm -f $$c >/dev/null 2>&1 || true; done
+	@pkill -f "[p]roxy\.py" >/dev/null 2>&1 || true
+	@pkill -f "[m]ain.py --listen" >/dev/null 2>&1 || true
+	@echo "Stopped: AEON + models + ASR + TTS + ComfyUI + proxy  (webui :8080 kept)"
+
+# ── Утилиты ──────────────────────────────────────────────────────────────────
+logs:
+	sudo docker logs -f $(CONTAINER)
+
+status:
+	@echo "=== Containers ===" && sudo docker ps --format "{{.Names}}\t{{.Status}}"
+	@echo "=== GPU ===" && nvidia-smi | grep -E "MiB|%"
+	@echo "=== Proxy ===" && pgrep -f proxy.py > /dev/null && echo "running" || echo "stopped"
+
+test:
+	curl -s http://localhost:8000/v1/chat/completions \
+	  -H "Content-Type: application/json" \
+	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"Say hello."}],"max_tokens":30}' \
+	  | python3 -m json.tool
+
+shell:
+	sudo docker exec -it $(CONTAINER) bash
+
+chat:
+	~/.local/bin/llm chat -m aeon
+
+agent:
+	python3 ~/agent.py
+
+ai:
+	bash ~/ai.sh
+
+cmd:
+	~/.local/bin/llm cmd -m aeon
+
+# === AUDIO MEDIA STACK (ASR + TTS VoiceClone) ===
+ASR_IMG  := ghcr.io/aeon-7/qwen3-asr-server:latest
+ASR_MODEL := Qwen/Qwen3-ASR-1.7B
+TTS_IMG  := martinb78/faster-qwen3-tts-dgx-spark:latest
+TTS_ROOT := /home/gh0stx/faster-qwen3-tts
+
+# ASR: speech->text :8011
+asr:
+	-sudo docker rm -f qwen3-asr >/dev/null 2>&1
+	sudo docker run -d --name qwen3-asr --gpus all --network aeon-stack -p 8011:8001 \
+	  -e ENABLE_NVFP4_SM100=0 -e VLLM_TEST_FORCE_FP8_MARLIN=1 -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+	  -v /home/gh0stx/.cache/huggingface:/root/.cache/huggingface \
+	  --shm-size 4g --restart unless-stopped $(ASR_IMG) \
+	  vllm serve $(ASR_MODEL) --served-model-name qwen3-asr --host 0.0.0.0 --port 8001 --gpu-memory-utilization 0.10 --max-model-len 8192 --max-num-seqs 4 --trust-remote-code
+	@echo "ASR ($(ASR_MODEL)) -> :8011/v1/audio/transcriptions (model=qwen3-asr)"
+
+# TTS VoiceClone: text->speech :8020 (voices in $$TTS_ROOT/config/speakers/)
+tts:
+	-sudo docker rm -f faster-qwen3-tts >/dev/null 2>&1
+	sudo docker run -d --name faster-qwen3-tts --gpus all --network aeon-stack -p 8020:8000 \
+	  -e NVIDIA_VISIBLE_DEVICES=all \
+	  -v $(TTS_ROOT)/models/Qwen3-TTS:/models/Qwen3-TTS:ro \
+	  -v $(TTS_ROOT)/config:/config:rw \
+	  -v $(TTS_ROOT)/config/speakers:/voices:ro \
+	  --restart unless-stopped $(TTS_IMG) \
+	  /bin/bash -c '(while true; do python3 /config/generate_voices.py; sleep 10; done) & python3 /config/run_server.py --model /models/Qwen3-TTS --voices /config/voices.json --port 8000 --max-seq-len 2048'
+	@echo "TTS -> :8020/v1/audio/speech"
+
+# Stop audio services (AEON/ComfyUI untouched)
+audio-stop:
+	-sudo docker rm -f qwen3-asr faster-qwen3-tts >/dev/null 2>&1
+	@echo "ASR + TTS stopped"
+
+# TTS web UI (страница озвучки) :8030
+ttsui:
+	-sudo fuser -k 8030/tcp 2>/dev/null
+	nohup python3 /home/gh0stx/tts_web.py > /tmp/ttsweb.log 2>&1 &
+	@sleep 2 && echo "TTS web UI -> http://192.168.8.239:8030"
+
+dflash: ## (re)start gh0stx: NVFP4 dflash_only + DFlash drafter, 90k ctx, ~19 t/s
+	bash /home/gh0stx/dflash_deploy.sh
+
+stop-dflash:
+	-sudo docker rm -f vllm-dflash >/dev/null 2>&1 || true

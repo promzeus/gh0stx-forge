@@ -1,0 +1,74 @@
+# [2] ADJUST for GLM-4.6: abliterate stock glm4_moe (256 pairs, coeff 1.5, norm-preserving)
+#   -> glm46-abliterated (BF16). No prune, no LoRA (--skip-lora): GLM-4.6 fits at NVFP4 whole.
+# Input from S3 glm46-base (~705GB). Dedicated glm-abliterate nodepool: r7i.48xlarge, root 2000Gi
+# so bf16 input + output coexist (from_pretrained mmaps input -> rm cannot reclaim blocks mid-run).
+# Self-terminates: external `kubectl delete job` on completion -> node empties -> Karpenter
+# consolidation; expireAfter 8h + activeDeadlineSeconds are backstops.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glm46-abliterate
+  namespace: distill
+spec:
+  backoffLimit: 3                   # auto-retry on spot reclaim (each retry re-syncs+re-measures)
+  activeDeadlineSeconds: 25200      # 7h hard kill across retries
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels: { app: glm46-abliterate }
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"   # hold node while running; freed when job deleted
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector:
+        workload: glm-abliterate
+      tolerations:
+        - { key: glm-abliterate, effect: NoSchedule, operator: Exists }
+        - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+      containers:
+        - name: abliterate
+          image: vllm/vllm-openai:latest
+          command: ["/bin/bash","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              B=ai-monitoring-test-123456789012
+              echo "[job] start $(date -u)"
+              python3 -m pip install -q -U transformers accelerate safetensors huggingface_hub hf_xet sentencepiece tiktoken blobfile awscli 2>&1 | tail -1
+              export HF_HOME=/model/hf TMPDIR=/tmp
+              mkdir -p /model/glm46 /work && cd /work
+              aws s3 cp s3://$B/glm46/merge_abliterate.py ./merge_abliterate.py
+              aws s3 cp s3://$B/glm46/extra_prompts.json  ./extra_prompts.json
+              echo "[job] sync base weights from S3 $(date -u)"
+              aws s3 sync s3://$B/glm46-base/ /model/glm46 --no-progress 2>&1 | tail -1
+              test -f /model/glm46/config.json || { echo "[job] FATAL: config.json missing"; exit 1; }
+              n=$(ls /model/glm46/*.safetensors 2>/dev/null | wc -l); echo "[job] base shards: $n"
+              [ "$n" -gt 0 ] || { echo "[job] FATAL: no weight shards"; exit 1; }
+              echo "[job] extra_prompts: $(python3 -c "import json;print(len(json.load(open('extra_prompts.json'))),'pairs')")"
+              echo "[job] disk before: $(df -h /model | tail -1)"
+              echo "[job] ===== ADJUST GLM-4.6 (256 pairs, coeff 1.5, norm-preserving, layer=0.6*92=55) ====="
+              ABL_NORM_PRESERVE=1 ABL_DO_OPROJ=1 ABL_DO_GDN_OUT=1 ABL_DO_EXPERT_DOWN=1 \
+              ABL_DO_SHARED_DOWN=1 ABL_DO_DENSE_DOWN=1 ABL_DO_EMBED=1 ABL_BATCH=8 ABL_SHARD=20GB \
+              OMP_NUM_THREADS=180 \
+                stdbuf -oL python3 merge_abliterate.py --skip-lora \
+                  --model /model/glm46 --out /model/glm46-abl 2>&1 | grep --line-buffered -vE "prompts$|Loading weights:"
+              test -f /model/glm46-abl/config.json || { echo "[job] FATAL: abliterate produced no output"; exit 1; }
+              echo "[job] output size:"; du -sh /model/glm46-abl
+              echo "[job] disk after: $(df -h /model | tail -1)"
+              echo "[job] ===== sync glm46-abliterated -> S3 $(date -u) ====="
+              aws s3 sync /model/glm46-abl/ s3://$B/glm46-abliterated/ --no-progress 2>&1 | tail -1
+              echo "[job] ===== GLM46_ABLITERATE_DONE $(date -u) ====="
+          env:
+            - { name: AWS_REGION, value: "eu-north-1" }
+            - { name: TMPDIR, value: "/tmp" }
+          resources:
+            requests: { cpu: "80", memory: 1400Gi }
+          volumeMounts:
+            - { name: model, mountPath: /model }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: model
+          emptyDir: { sizeLimit: 1780Gi }
+        - name: tmp
+          emptyDir: { sizeLimit: 40Gi }

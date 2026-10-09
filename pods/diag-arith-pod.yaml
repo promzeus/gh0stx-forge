@@ -1,0 +1,58 @@
+# Диагностика: на каком этапе просела арифметика. pruned_v3c (прунинг) + decensored_v3c (+абляция) BF16.
+# g6e.24xlarge (4×L40S 192G VRAM + 768G RAM), device_map=auto с CPU-offload ~70G. nvfp4_v3c уже знаем: 4/6.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: diag-arith
+  namespace: distill
+  labels: { app: diag-arith }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    workload: nvfp4-quant
+    node.kubernetes.io/instance-type: g6e.24xlarge
+  tolerations:
+    - { key: "test-gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "nvidia.com/gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "karpenter.sh/disruption", effect: "NoSchedule", operator: "Exists" }
+  containers:
+    - name: diag
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /data/diag_arith.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U "transformers==5.12.1" accelerate safetensors awscli 2>&1 | tail -2 || true
+          mkdir -p /data/pruned_v3c /data/decensored_v3c /data/scripts /data/tmp
+          aws s3 cp s3://$B/heal/arith_diag.py /data/scripts/ >/dev/null
+          echo "[pod] pull pruned_v3c (262G) $(date -u)"
+          aws s3 sync s3://$B/pruned_v3c/ /data/pruned_v3c/ --no-progress 2>&1 | tail -1
+          echo "[pod] pull decensored_v3c (262G) $(date -u)"
+          aws s3 sync s3://$B/decensored_v3c/ /data/decensored_v3c/ --no-progress 2>&1 | tail -1
+          cd /data/scripts
+          echo "[pod] ===== DIAG pruned_v3c (прунинг только) $(date -u) ====="
+          MODEL_DIR=/data/pruned_v3c TAG=pruned_v3c python3 arith_diag.py; echo "rc_pruned=$?"
+          echo "[pod] ===== DIAG decensored_v3c (прунинг+абляция) $(date -u) ====="
+          MODEL_DIR=/data/decensored_v3c TAG=decensored_v3c python3 arith_diag.py; echo "rc_dec=$?"
+          echo "[pod] ===== DIAG_ARITH_DONE $(date -u) ====="
+          sleep 3600
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/data/.hf" }
+        - { name: TMPDIR, value: "/data/tmp" }
+        - { name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True" }
+      resources:
+        requests: { cpu: "16", memory: 600Gi, nvidia.com/gpu: 4 }
+        limits: { nvidia.com/gpu: 4 }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+        - { name: dshm, mountPath: /dev/shm }
+  volumes:
+    - name: data
+      emptyDir: { sizeLimit: 1000Gi }
+    - name: dshm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }

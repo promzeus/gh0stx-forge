@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: gh0stx-qlora-h200, namespace: distill}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 21600
+  template:
+    metadata: {labels: {app: gh0stx-qlora-h200}}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {karpenter.sh/nodepool: gpu-distill-h200}
+      tolerations:
+      - {key: test-gpu, effect: NoSchedule}
+      containers:
+      - name: train
+        image: public.ecr.aws/docker/library/python:3.12
+        command: ["bash","/code/entrypoint.sh"]
+        env:
+        - {name: BASE_DIR, value: /base}
+        - {name: BASE_S3, value: s3://ai-monitoring-test-123456789012/decensored_v4}
+        - {name: DATA, value: /data/sft.jsonl}
+        - {name: OUT_DIR, value: /data/adapter}
+        - {name: S3_PREFIX, value: s3://ai-monitoring-test-123456789012/gh0stx-rft}
+        - {name: AWS_REGION, value: eu-north-1}
+        - {name: HF_HOME, value: /data/hf}
+        - {name: EPOCHS, value: "3"}
+        - {name: MAXLEN, value: "8192"}
+        - {name: GRAD_ACCUM, value: "8"}
+        - {name: PER_GPU_MEM, value: "120GiB"}
+        - {name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True"}
+        volumeMounts:
+        - {name: base, mountPath: /base}
+        - {name: code, mountPath: /code}
+        - {name: data, mountPath: /data}
+        - {name: shm, mountPath: /dev/shm}
+        resources:
+          requests: {cpu: "16", memory: 200Gi, nvidia.com/gpu: 8}
+          limits: {memory: 1600Gi, nvidia.com/gpu: 8}
+      volumes:
+      - {name: base, emptyDir: {sizeLimit: 320Gi}}
+      - {name: code, configMap: {name: gh0stx-qlora-code}}
+      - {name: data, emptyDir: {sizeLimit: 60Gi}}
+      - {name: shm, emptyDir: {medium: Memory, sizeLimit: 32Gi}}

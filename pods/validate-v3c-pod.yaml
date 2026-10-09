@@ -1,0 +1,53 @@
+# Валидация pruned_v3c (гейт): вернулся ли MATH после фикса (6 доменов, KEEP_FRAC 0.34, math-слотов ~29).
+# thinking-OFF + MAXTOK 128 (как v3 замер, apples-to-apples). Грузит pruned_v3c с PVC (262GiB BF16).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: validate-v3c
+  namespace: distill
+  labels: { app: validate-v3c }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: validate
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/validate_v3c.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          mkdir -p /work && cd /work
+          aws s3 cp s3://$B/heal/test_validate.py . >/dev/null
+          SRC=/pv/run397b_v3/pruned_v3c
+          if [ ! -f "$SRC/config.json" ]; then echo "[pod] pull pruned_v3c from S3"; mkdir -p "$SRC"; aws s3 sync s3://$B/pruned_v3c/ "$SRC"/ --no-progress 2>&1 | tail -1; fi
+          echo "[pod] pruned_v3c:"; du -sh "$SRC" 2>/dev/null
+          echo "[pod] ===== VALIDATE pruned_v3c (141B, KEEP 0.34, 6 доменов) — thinking OFF, MAXTOK 128 ====="
+          TEST_MODEL="$SRC" ENABLE_THINKING=0 MAXTOK=128 python3 test_validate.py 2>&1 | grep --line-buffered -vE "it/s\]"
+          echo "[pod] ===== VALIDATE_V3C_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "40", memory: 640Gi }   # 262GiB + merge spike ~2×; r7i.24xlarge(768G)
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 60Gi }

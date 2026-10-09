@@ -1,0 +1,15 @@
+# Single-node scratch/model storage. gp3 EBS (RWO) is enough for one node —
+# FSx Lustre (RWX) only matters once we go multi-node.
+# WaitForFirstConsumer => no EBS volume is created (and no cost) until a pod mounts it.
+# Persists across pod restarts so a downloaded 397B checkpoint isn't lost.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: distill-workspace
+  namespace: distill
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 2500Gi

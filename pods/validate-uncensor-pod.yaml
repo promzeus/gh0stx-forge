@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: validate-uncensor
+  namespace: distill
+  labels: { app: validate-uncensor }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+    karpenter.sh/capacity-type: on-demand      # NO spot -> no mid-run reclaim (killed the last run at 77min)
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: val
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/validate_uncensor2.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          aws s3 cp s3://$B/heal/test_uncensor_check.py /tmp/test_uncensor_check.py >/dev/null
+          echo "[pod] ===== DOUBLE-CHECK decensored_v2 (degradation + uncensor) on-demand ====="
+          MAXTOK=320 TEST_MODEL=/pv/run397b_v2/decensored_v2 \
+            stdbuf -oL python3 /tmp/test_uncensor_check.py 2>&1 | grep --line-buffered -vE "it/s\]"
+          echo "[pod] ===== CHECK_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "80", memory: 1000Gi }   # >768GB -> r7i.48xlarge (1.5TB, 192 vCPU) on-demand; faster CPU inference
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 40Gi }

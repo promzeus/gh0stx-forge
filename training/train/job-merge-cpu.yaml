@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: gh0stx-merge, namespace: distill}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 14400
+  template:
+    metadata: {labels: {app: gh0stx-merge}}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {karpenter.sh/nodepool: gh0stx-merge-cpu}
+      tolerations:
+      - {key: gh0stx-merge, effect: NoSchedule}
+      containers:
+      - name: merge
+        image: public.ecr.aws/docker/library/python:3.12
+        command: ["bash","/code/entrypoint_merge.sh"]
+        env:
+        - {name: BASE_DIR, value: /base}
+        - {name: BASE_S3, value: s3://ai-monitoring-test-123456789012/decensored_v4}
+        - {name: ADAPTER_DIR, value: /adapter}
+        - {name: MERGED_DIR, value: /merged}
+        - {name: S3_PREFIX, value: s3://ai-monitoring-test-123456789012/gh0stx-rft}
+        - {name: AWS_REGION, value: eu-north-1}
+        volumeMounts:
+        - {name: work, mountPath: /base}
+        - {name: adapter, mountPath: /adapter}
+        - {name: merged, mountPath: /merged}
+        - {name: code, mountPath: /code}
+        resources:
+          requests: {cpu: "24", memory: 560Gi}
+          limits: {memory: 700Gi}
+      volumes:
+      - {name: work, emptyDir: {sizeLimit: 320Gi}}
+      - {name: adapter, emptyDir: {sizeLimit: 5Gi}}
+      - {name: merged, emptyDir: {sizeLimit: 320Gi}}
+      - {name: code, configMap: {name: gh0stx-qlora-code}}

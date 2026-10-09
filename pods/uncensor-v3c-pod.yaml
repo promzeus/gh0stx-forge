@@ -1,0 +1,60 @@
+# [2] ADJUST v3c: abliterate pruned_v3c (1579 пар, coeff 1.5, norm-preserving) → decensored_v3c.
+# Вход с PVC (/pv/run397b_v3/pruned_v3c, 262G BF16). Свежая нода (урок OOM). r7i.48xlarge (1.5TB).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: uncensor-v3c
+  namespace: distill
+  labels: { app: uncensor-v3c }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: uncensor
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/uncensor_v3c.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          mkdir -p /work && cd /work
+          aws s3 cp s3://$B/heal/merge_abliterate.py . >/dev/null
+          aws s3 cp s3://$B/heal/extra_prompts.json . >/dev/null
+          SRC=/pv/run397b_v3/pruned_v3c
+          if [ ! -f "$SRC/config.json" ]; then echo "[pod] pull pruned_v3c from S3"; mkdir -p "$SRC"; aws s3 sync s3://$B/pruned_v3c/ "$SRC"/ --no-progress 2>&1 | tail -1; fi
+          echo "[pod] pruned_v3c:"; du -sh "$SRC" 2>/dev/null
+          echo "[pod] extra_prompts:"; python3 -c "import json;print(len(json.load(open('extra_prompts.json'))),'pairs')"
+          echo "[pod] ===== ADJUST v3c (1579 пар, coeff 1.5, norm-preserving, all targets) ====="
+          ABL_NORM_PRESERVE=1 ABL_DO_OPROJ=1 ABL_DO_GDN_OUT=1 ABL_DO_EXPERT_DOWN=1 ABL_DO_SHARED_DOWN=1 ABL_DO_EMBED=1 \
+          ABL_BATCH=8 ABL_SHARD=20GB \
+            stdbuf -oL python3 merge_abliterate.py --skip-lora \
+              --model "$SRC" --out /pv/run397b_v3/decensored_v3c 2>&1 | grep --line-buffered -vE "it/s\]"
+          echo "[pod] ===== save decensored_v3c -> S3 ====="
+          aws s3 sync /pv/run397b_v3/decensored_v3c/ s3://$B/decensored_v3c/ --no-progress 2>&1 | tail -1
+          echo "[pod] ===== ADJUST_V3C_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "80", memory: 1400Gi }
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 60Gi }

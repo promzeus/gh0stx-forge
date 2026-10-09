@@ -1,0 +1,83 @@
+# Corpus-build: качает публичные security-датасеты по максимуму, сэмплит/дедупит,
+# пишет offsec-пул в S3 (corpus/corpus_offsec.json). Изолировано — не трогает gx10.
+# Контент offensive берётся из ПУБЛИЧНЫХ датасетов (не генерация). Только counts в лог.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: corpus-build
+  namespace: distill
+  labels: { app: corpus-build }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: build
+      image: python:3.11-slim
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          B=ai-monitoring-test-123456789012
+          echo "[build] deps $(date -u)"
+          pip install -q datasets huggingface_hub awscli 2>&1 | tail -1 || true
+          mkdir -p /w && cd /w
+          python3 - <<'PY'
+          import json, re, hashlib
+          from datasets import load_dataset
+          # (dataset, config, split, [candidate text fields], max_take)
+          SRC = [
+            ("AlicanKiraz0/Cybersecurity-Dataset-Fenrir-v2.0", None, "train", ["messages","conversations","text","output","response","assistant"], 20000),
+            ("CyberNative/Code_Vulnerability_Security_DPO", None, "train", ["chosen","prompt","question","rejected"], 8000),
+            ("WhiteRabbitNeo/WRN-Chapter-1", None, "train", ["text","output","response","completion"], 8000),
+            ("WhiteRabbitNeo/WRN-Chapter-2", None, "train", ["text","output","response","completion"], 8000),
+            ("AlicanKiraz0/Cybersecurity-Dataset-v1", None, "train", ["output","response","text","assistant","completion"], 4000),
+          ]
+          def as_text(row, fields):
+            parts=[]
+            for f in fields:
+              v=row.get(f)
+              if v is None: continue
+              if isinstance(v,str): parts.append(v)
+              elif isinstance(v,list):
+                for m in v:
+                  if isinstance(m,dict):
+                    parts.append(str(m.get("content") or m.get("value") or ""))
+                  else: parts.append(str(m))
+              elif isinstance(v,dict):
+                parts.append(str(v.get("content") or v.get("value") or v))
+            return "\n".join(p for p in parts if p).strip()
+          seen=set(); pool=[]
+          for name,cfg,split,fields,mx in SRC:
+            try:
+              ds=load_dataset(name, cfg, split=split) if cfg else load_dataset(name, split=split)
+            except Exception as e:
+              print(f"[build] SKIP {name}: {e}"); continue
+            cnt=0
+            for row in ds:
+              t=as_text(row, fields)
+              if not t or len(t)<80: continue
+              t=t[:6000]
+              h=hashlib.md5(t.encode()).hexdigest()
+              if h in seen: continue
+              seen.add(h); pool.append(t); cnt+=1
+              if cnt>=mx: break
+            print(f"[build] {name}: +{cnt} (pool={len(pool)})")
+          json.dump(pool, open("/w/corpus_offsec.json","w"), ensure_ascii=False)
+          print(f"[build] TOTAL offsec pool (deduped): {len(pool)}")
+          PY
+          echo "[build] push -> S3"
+          aws s3 cp /w/corpus_offsec.json s3://$B/corpus/corpus_offsec.json 2>&1 | tail -1
+          echo "[build] CORPUS_BUILD_DONE $(date -u)"
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+      resources:
+        requests: { cpu: "4", memory: 16Gi }
+      volumeMounts:
+        - { name: w, mountPath: /w }
+  volumes:
+    - name: w
+      emptyDir: { sizeLimit: 40Gi }

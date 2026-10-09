@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: gh0stx-quant-graft, namespace: distill}
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 14400
+  template:
+    metadata: {labels: {app: gh0stx-quant-graft}}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {karpenter.sh/nodepool: cpu-prune}
+      tolerations:
+      - {key: cpu-prune, effect: NoSchedule}
+      containers:
+      - name: quant
+        image: public.ecr.aws/docker/library/python:3.12
+        command: ["bash","/code/entrypoint_quant.sh"]
+        env:
+        - {name: S3_PREFIX, value: s3://ai-monitoring-test-123456789012/gh0stx-rft}
+        - {name: AWS_REGION, value: eu-north-1}
+        volumeMounts:
+        - {name: work, mountPath: /merged}
+        - {name: work2, mountPath: /graft_out}
+        - {name: code, mountPath: /code}
+        resources:
+          requests: {cpu: "32", memory: 128Gi, ephemeral-storage: 500Gi}
+          limits: {memory: 400Gi, ephemeral-storage: 900Gi}
+      volumes:
+      - {name: work, emptyDir: {sizeLimit: 400Gi}}
+      - {name: work2, emptyDir: {sizeLimit: 60Gi}}
+      - {name: code, configMap: {name: gh0stx-quant-code}}

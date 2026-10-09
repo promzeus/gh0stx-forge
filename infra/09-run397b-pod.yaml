@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: run397b
+  namespace: distill
+  labels: { app: run397b }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test     # EKS pod-identity -> S3 read/write (scoped to the bucket)
+  nodeSelector: { workload: gpu-distill }
+  tolerations:
+    - { key: "test-gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "nvidia.com/gpu", effect: "NoSchedule", operator: "Exists" }
+  containers:
+    - name: run
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          echo "[pod] deps (transformers for Qwen3.5 + awscli)"
+          python3 -m pip install -q -U transformers accelerate awscli 2>&1 | tail -2 || true
+          aws configure set default.s3.max_concurrent_requests 32 || true
+          echo "[pod] wait for staging completion marker (avoid consuming a partial model)"
+          until aws s3 ls "s3://$S3_BUCKET/$S3_PREFIX/_STAGE_COMPLETE" >/dev/null 2>&1; do
+            echo "  staging not complete yet, wait 60s"; sleep 60; done
+          echo "[pod] staging complete; sync model S3 -> local NVMe (fast, ~GB/s)"
+          mkdir -p /model/source /model/run397b
+          aws s3 sync "s3://$S3_BUCKET/$S3_PREFIX/" /model/source/ --no-progress 2>&1 | tail -3
+          echo "[pod] arch precheck (local, before compute)"
+          python3 - <<'PY'
+          import os, torch
+          from transformers import AutoConfig, AutoModelForCausalLM
+          M=os.environ["MODEL_ID"]
+          c=AutoConfig.from_pretrained(M, trust_remote_code=True)
+          print("model_type:", c.model_type, flush=True)
+          try:
+              with torch.device('meta'): AutoModelForCausalLM.from_config(c, trust_remote_code=True)
+              print("ARCH_OK", flush=True)
+          except Exception as e:
+              print("ARCH_UNSUPPORTED:", repr(e), flush=True); raise SystemExit(3)
+          PY
+          if [ $? -ne 0 ]; then echo "[pod] ABORT: arch not supported"; exit 3; fi
+          echo "[pod] Phase A+B (importance -> prune -> save to NVMe)"
+          python3 /scripts/pipeline_397b.py ; rc=$?
+          echo "[pod] sync pruned output NVMe -> S3 (durable, for GB10 heal phase)"
+          aws s3 sync /model/run397b/ "s3://$S3_BUCKET/output/run397b/" --no-progress 2>&1 | tail -3
+          echo "[pod] done rc=$rc"; exit $rc
+      env:
+        - { name: MODEL_ID, value: "/model/source" }     # local path => no HF download, load from NVMe
+        - { name: KEEP_FRAC, value: "0.36" }
+        - { name: OUT_DIR, value: "/model/run397b" }      # output on NVMe, synced to S3 after
+        - { name: S3_BUCKET, value: "ai-monitoring-test-123456789012" }
+        - { name: S3_PREFIX, value: "qwen3.5-397b-bf16" }
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: /model/.hf }
+        - { name: TMPDIR, value: /model/tmp }
+      resources:
+        requests: { cpu: "32", memory: 256Gi, nvidia.com/gpu: "8" }
+        limits: { nvidia.com/gpu: "8" }
+      volumeMounts:
+        - { name: model, mountPath: /model }     # RAID0 instance-store NVMe (fast, ~30TB)
+        - { name: scripts, mountPath: /scripts }
+        - { name: dshm, mountPath: /dev/shm }
+  volumes:
+    - { name: model, emptyDir: { sizeLimit: 1500Gi } }    # lands on the RAID0 NVMe
+    - { name: scripts, configMap: { name: run397b-script } }
+    - { name: dshm, emptyDir: { medium: Memory, sizeLimit: 64Gi } }

@@ -1,0 +1,64 @@
+# [2] QUANT v4: NVFP4 decensored_v4 -> nvfp4_v4 (~84G). g6e.24xlarge (768ГБ, linearize-спайк влезает).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvfp4-v4
+  namespace: distill
+  labels: { app: nvfp4-v4 }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    workload: nvfp4-quant
+    node.kubernetes.io/instance-type: g6e.24xlarge
+  tolerations:
+    - { key: "test-gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "nvidia.com/gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "karpenter.sh/disruption", effect: "NoSchedule", operator: "Exists" }
+  containers:
+    - name: nv
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U llmcompressor peft accelerate datasets safetensors awscli 2>&1 | tail -2 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -2 || true
+          mkdir -p /data/decensored_v4 /data/nvfp4_v4 /data/scripts /data/tmp /data/.hf
+          aws s3 cp s3://$B/heal/nvfp4_quant.py /data/scripts/ >/dev/null
+          cd /data/scripts
+          if aws s3 ls s3://$B/nvfp4_v4/_NVFP4_COMPLETE >/dev/null 2>&1; then
+            echo "[pod] === RESUME: nvfp4_v4 already in S3 ==="
+          else
+            echo "[pod] pull decensored_v4"
+            aws s3 sync s3://$B/decensored_v4/ /data/decensored_v4/ --no-progress 2>&1 | tail -1
+            echo "[pod] === NVFP4 DRY (4) $(date -u) ==="
+            NVFP4_IN=/data/decensored_v4 NVFP4_OUT=/data/nvfp4_dry NVFP4_SAMPLES=4 NVFP4_MAXSEQ=1024 python3 nvfp4_quant.py; drc=$?
+            if [ $drc -ne 0 ]; then echo "[pod] NVFP4_DRY_FAILED rc=$drc"; sleep 3; exit $drc; fi
+            echo "[pod] === NVFP4 FULL (512) $(date -u) ==="
+            NVFP4_IN=/data/decensored_v4 NVFP4_OUT=/data/nvfp4_v4 NVFP4_SAMPLES=512 python3 nvfp4_quant.py; frc=$?
+            if [ $frc -ne 0 ]; then echo "[pod] NVFP4_FULL_FAILED rc=$frc"; sleep 3; exit $frc; fi
+            echo "[pod] === PUSH nvfp4_v4 $(date -u) ==="
+            aws s3 sync /data/nvfp4_v4 s3://$B/nvfp4_v4/ --no-progress 2>&1 | tail -2
+            echo ok | aws s3 cp - s3://$B/nvfp4_v4/_NVFP4_COMPLETE
+          fi
+          echo "[pod] === NVFP4_V4_DONE $(date -u) ==="
+          sleep 120
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/data/.hf" }
+        - { name: TMPDIR, value: "/data/tmp" }
+        - { name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True" }
+      resources:
+        requests: { cpu: "16", memory: 600Gi, nvidia.com/gpu: 1 }
+        limits: { nvidia.com/gpu: 1 }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+        - { name: dshm, mountPath: /dev/shm }
+  volumes:
+    - name: data
+      emptyDir: { sizeLimit: 1000Gi }
+    - name: dshm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }

@@ -1,0 +1,55 @@
+# MTP-graft: читает mtp.* из базы 397B (PVC), режет 512→184 (router-norm), overlay (shard+index+config) → S3.
+# Лёгкий: только ~13GB mtp-тензоров, НЕ грузит 88G target (overlay-подход).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: graft-mtp
+  namespace: distill
+  labels: { app: graft-mtp }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: graft
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/graft_mtp.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U safetensors awscli 2>&1 | tail -1 || true
+          mkdir -p /work/meta /work/out && cd /work
+          aws s3 cp s3://$B/heal/graft_mtp.py . >/dev/null
+          echo "[pod] pull target config+index (small)"
+          aws s3 cp s3://$B/nvfp4_final_v2/config.json /work/meta/config.json >/dev/null
+          aws s3 cp s3://$B/nvfp4_final_v2/model.safetensors.index.json /work/meta/model.safetensors.index.json >/dev/null
+          # база 397B на PVC?
+          if [ ! -f /pv/397b/model.safetensors.index.json ]; then echo "[pod] 397b sync"; mkdir -p /pv/397b; aws s3 sync s3://$B/qwen3.5-397b-bf16/ /pv/397b/ --no-progress 2>&1 | tail -1; fi
+          echo "[pod] ===== GRAFT MTP (512→184 router-norm) ====="
+          BASE_DIR=/pv/397b QUANT_META_DIR=/work/meta OUT_DIR=/work/out python3 graft_mtp.py
+          echo "[pod] ===== push overlay -> S3 nvfp4_final_v2_mtp/ ====="
+          aws s3 cp /work/out/model-mtp-grafted.safetensors s3://$B/nvfp4_final_v2_mtp/model-mtp-grafted.safetensors --no-progress 2>&1 | tail -1
+          aws s3 cp /work/out/model.safetensors.index.json s3://$B/nvfp4_final_v2_mtp/model.safetensors.index.json 2>&1 | tail -1
+          aws s3 cp /work/out/config.json s3://$B/nvfp4_final_v2_mtp/config.json 2>&1 | tail -1
+          echo "[pod] ===== GRAFT_MTP_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "8", memory: 64Gi }
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 40Gi }

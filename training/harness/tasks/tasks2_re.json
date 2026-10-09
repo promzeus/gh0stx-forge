@@ -1,0 +1,124 @@
+{
+ "tasks": [
+  {
+   "id": "re_vm_stack_flag",
+   "category": "vm",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > vm.py <<'EOF'\n# tiny stack VM. PROG is a flat int stream of opcodes+operands.\n# 0 PUSH imm | 1 ADD | 2 XOR | 3 EMIT(pop->char) | 4 DUP | 5 MUL | 6 HALT\nPROG = [0, 28, 0, 90, 2, 3, 0, 22, 0, 90, 2, 3, 0, 27, 0, 90, 2, 3, 0, 29, 0, 90, 2, 3, 0, 33, 0, 90, 2, 3, 0, 41, 0, 90, 2, 3, 0, 46, 0, 90, 2, 3, 0, 110, 0, 90, 2, 3, 0, 57, 0, 90, 2, 3, 0, 49, 0, 90, 2, 3, 0, 5, 0, 90, 2, 3, 0, 46, 0, 90, 2, 3, 0, 40, 0, 90, 2, 3, 0, 59, 0, 90, 2, 3, 0, 57, 0, 90, 2, 3, 0, 63, 0, 90, 2, 3, 0, 39, 0, 90, 2, 3, 6]\ndef run(prog):\n    st = []; out = []; i = 0\n    while i < len(prog):\n        op = prog[i]; i += 1\n        if op == 0:\n            st.append(prog[i]); i += 1\n        elif op == 1:\n            b = st.pop(); a = st.pop(); st.append((a + b) & 0xff)\n        elif op == 2:\n            b = st.pop(); a = st.pop(); st.append(a ^ b)\n        elif op == 3:\n            out.append(chr(st.pop()))\n        elif op == 4:\n            st.append(st[-1])\n        elif op == 5:\n            b = st.pop(); a = st.pop(); st.append((a * b) & 0xff)\n        elif op == 6:\n            break\n    return ''.join(out)\n\nif __name__ == '__main__':\n    print(run(PROG))\nEOF\n",
+   "prompt": "vm.py contains a stack-machine bytecode program (PROG) and its interpreter. Trace or run it to recover the flag string it builds and prints. Write the exact flag (no trailing newline) to answer.txt in the working directory.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nexp = 'FLAG{st4ck_trace}'\nprint('PASS' if a == exp else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 vm.py | tr -d '\\n' > answer.txt\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_vm_reg_output",
+   "category": "vm",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > reg.py <<'EOF'\n# register VM: r[0..3], r[0] preloaded with INPUT. Program prints one int at OUT.\n# ins tuple (op,a,b): 0 SETI r=a v=b | 1 ADD r=a += r[b] | 2 XORI r=a ^= b\n#   3 MULI r=a *= b | 4 SHLI r=a <<= b | 5 ANDI r=a &= b | 6 MOV r=a = r[b]\n#   7 OUT r=a | 8 HALT     (all arithmetic mod 2**32)\nINPUT = 1337\nPROG = [(6, 1, 0), (3, 1, 3), (2, 1, 43981), (6, 2, 0), (1, 2, 1), (4, 2, 1), (5, 2, 65535), (6, 0, 2), (7, 0), (8,)]\ndef run(x):\n    r = [x, 0, 0, 0]; out = None\n    for ins in PROG:\n        op = ins[0]\n        if op == 0: r[ins[1]] = ins[2]\n        elif op == 1: r[ins[1]] = (r[ins[1]] + r[ins[2]]) & 0xffffffff\n        elif op == 2: r[ins[1]] = r[ins[1]] ^ ins[2]\n        elif op == 3: r[ins[1]] = (r[ins[1]] * ins[2]) & 0xffffffff\n        elif op == 4: r[ins[1]] = (r[ins[1]] << ins[2]) & 0xffffffff\n        elif op == 5: r[ins[1]] = r[ins[1]] & ins[2]\n        elif op == 6: r[ins[1]] = r[ins[2]]\n        elif op == 7: out = r[ins[1]]\n        elif op == 8: break\n    return out\n\nif __name__ == '__main__':\n    print(run(INPUT))\nEOF\n",
+   "prompt": "reg.py is a small register-VM program run on the baked INPUT; it prints a single integer. Recover that integer and write it (decimal) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if a == '21310' else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 reg.py | tr -d '\\n' > answer.txt\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_serial_accept",
+   "category": "serial",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > check.py <<'EOF'\ndef valid(s):\n    if len(s) != 5 or not s.isdigit():\n        return False\n    d = [int(c) for c in s]\n    if d[0] + d[4] != 9: return False\n    if d[1] * d[2] != 12: return False\n    if (d[3] ^ d[0]) != 5: return False\n    if sum(d) != 20: return False\n    return True\nEOF\n",
+   "prompt": "check.py exposes valid(s), a serial validator over 5-digit strings. Find any serial it accepts and write it to answer.txt. The grader re-runs valid() on your serial.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport check\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if check.valid(a) else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport check\nfor n in range(100000):\n    s = \"%05d\" % n\n    if check.valid(s):\n        open('answer.txt', 'w').write(s); break\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_keygen",
+   "category": "keygen",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > lic.py <<'EOF'\ndef _h(name):\n    h = 0\n    for c in name:\n        h = (h * 31 + ord(c)) & 0xffffffff\n    return h\n\ndef validate(name, serial):\n    h = _h(name)\n    expect = \"%04X-%04X\" % ((h >> 16) & 0xffff, h & 0xffff)\n    return serial == expect\nEOF\n",
+   "prompt": "lic.py validate(name, serial) accepts a serial derived from name. For the name \"acme-corp\", produce a serial validate() accepts and write it to answer.txt. The grader runs validate(\"acme-corp\", your_answer).",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport lic\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if lic.validate(\"acme-corp\", a) else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport lic\nh = lic._h(\"acme-corp\")\nopen('answer.txt', 'w').write(\"%04X-%04X\" % ((h >> 16) & 0xffff, h & 0xffff))\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_patch_check",
+   "category": "patch",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > locked.py <<'EOF'\ndef unlock():\n    key = 0\n    magic = 0x539\n    if key == magic:\n        return \"GRANTED\"\n    return \"DENIED\"\nEOF\n",
+   "prompt": "locked.py unlock() currently returns \"DENIED\". Edit exactly one line in locked.py in place so unlock() returns \"GRANTED\". The grader imports locked and calls unlock().",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nout=$(python3 -c 'import locked; print(locked.unlock())' 2>/dev/null)\ntest \"$out\" = GRANTED && echo PASS || echo FAIL",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nsrc = open('locked.py').read().replace('key = 0\\n', 'key = 0x539\\n', 1)\nopen('locked.py', 'w').write(src)\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_constraint_key",
+   "category": "constraint",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > constraints.py <<'EOF'\ndef check(k):\n    if len(k) != 6 or not all('a' <= c <= 'z' for c in k):\n        return False\n    o = [ord(c) for c in k]\n    return (o[0] + o[1] == 229 and o[0] - o[1] == -5 and\n            o[2] + o[3] == 244 and o[2] - o[3] == 0 and\n            o[4] + o[5] == 209 and o[4] - o[5] == 7)\nEOF\n",
+   "prompt": "constraints.py check(k) accepts one 6-char lowercase key satisfying a set of char-code equations. Recover the key and write it to answer.txt. The grader runs check() on it.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport constraints\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if constraints.check(a) else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\ndef pair(su, di):\n    return chr((su + di) // 2) + chr((su - di) // 2)\nk = pair(229, -5) + pair(244, 0) + pair(209, 7)\nopen('answer.txt', 'w').write(k)\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_flatten_sm",
+   "category": "obfuscation",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > sm.py <<'EOF'\n# flattened control flow: one dispatch loop over `state`.\ndef f(n):\n    state = 0; acc = 0; x = n\n    while True:\n        if state == 0:\n            acc = x + 7; state = 3\n        elif state == 3:\n            acc = acc ^ 0x2a; state = 1\n        elif state == 1:\n            state = 2 if acc % 2 == 0 else 4\n        elif state == 2:\n            acc = (acc * 3) & 0xffff; state = 5\n        elif state == 4:\n            acc = (acc + 100) & 0xffff; state = 5\n        elif state == 5:\n            return acc\n\nINPUT = 12345\nif __name__ == '__main__':\n    print(f(INPUT))\nEOF\n",
+   "prompt": "sm.py f(n) is a flattened state machine (a while loop dispatching on `state`). Recover the exact value it returns for INPUT and write it (decimal) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if a == '37182' else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 sm.py | tr -d '\\n' > answer.txt\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_transform_decode",
+   "category": "transform",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > enc.py <<'EOF'\ndef encode(s):\n    out = []\n    for i, c in enumerate(s):\n        v = (ord(c) + (i * 7) % 26) & 0xff\n        v ^= 0x3c\n        out.append(\"%02x\" % v)\n    return \"\".join(out)\n\nif __name__ == '__main__':\n    import sys\n    print(encode(sys.argv[1]))\nEOF\nprintf '4f504dbb5b4153b85542b946514e' > cipher.txt\n",
+   "prompt": "enc.py encode() produced cipher.txt (hex). Invert the transform to recover the original plaintext and write it to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if a == 'secret_message' else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nh = open('cipher.txt').read().strip()\nbs = [int(h[i:i+2], 16) for i in range(0, len(h), 2)]\nout = []\nfor i, t in enumerate(bs):\n    u = t ^ 0x3c\n    c = (u - (i * 7) % 26) & 0xff\n    out.append(chr(c))\nopen('answer.txt', 'w').write(''.join(out))\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_js_vm_flag",
+   "category": "vm",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > vm.js <<'EOF'\n// stack VM. PROG is a flat int stream.\n// 0 PUSH imm | 1 ADD | 2 XOR | 3 EMIT | 6 HALT\nconst PROG = [0, 117, 0, 51, 2, 3, 0, 127, 0, 51, 2, 3, 0, 114, 0, 51, 2, 3, 0, 116, 0, 51, 2, 3, 0, 72, 0, 51, 2, 3, 0, 89, 0, 51, 2, 3, 0, 64, 0, 51, 2, 3, 0, 108, 0, 51, 2, 3, 0, 69, 0, 51, 2, 3, 0, 94, 0, 51, 2, 3, 0, 108, 0, 51, 2, 3, 0, 92, 0, 51, 2, 3, 0, 88, 0, 51, 2, 3, 0, 78, 0, 51, 2, 3, 6];\nfunction run(p) {\n  let st = [], out = [], i = 0;\n  while (i < p.length) {\n    let op = p[i++];\n    if (op === 0) { st.push(p[i++]); }\n    else if (op === 1) { let b = st.pop(), a = st.pop(); st.push((a + b) & 0xff); }\n    else if (op === 2) { let b = st.pop(), a = st.pop(); st.push(a ^ b); }\n    else if (op === 3) { out.push(String.fromCharCode(st.pop())); }\n    else if (op === 6) { break; }\n  }\n  return out.join('');\n}\nconsole.log(run(PROG));\nEOF\n",
+   "prompt": "vm.js is a stack-machine bytecode program with its interpreter (run with node). Recover the flag it prints and write it (no trailing newline) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if a == 'FLAG{js_vm_ok}' else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\nnode vm.js | tr -d '\\n' > answer.txt\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_js_serial",
+   "category": "serial",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > check.js <<'EOF'\nfunction valid(s) {\n  if (!/^[0-9]{4}$/.test(s)) return false;\n  const d = [...s].map(Number);\n  if (d[0] + d[1] + d[2] + d[3] !== 20) return false;\n  if (d[0] !== d[3]) return false;\n  if (d[1] * d[2] !== 15) return false;\n  return true;\n}\nconst s = process.argv[2] || \"\";\nconsole.log(valid(s) ? \"OK\" : \"NO\");\nEOF\n",
+   "prompt": "check.js prints OK when given (as argv) a 4-digit serial it accepts, else NO. Find a serial it accepts and write it to answer.txt. The grader runs: node check.js \"$(cat answer.txt)\".",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\nout=$(node check.js \"$(cat answer.txt 2>/dev/null)\" 2>/dev/null)\ntest \"$out\" = OK && echo PASS || echo FAIL",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\nnode -e 'const re=/^[0-9]{4}$/; function valid(s){ if(!re.test(s))return false; const d=[...s].map(Number); if(d[0]+d[1]+d[2]+d[3]!==20)return false; if(d[0]!==d[3])return false; if(d[1]*d[2]!==15)return false; return true;} const fs=require(\"fs\"); for(let n=0;n<10000;n++){const s=String(n).padStart(4,\"0\"); if(valid(s)){fs.writeFileSync(\"answer.txt\",s);break;}}'\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_find_preimage",
+   "category": "constraint",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > pre.py <<'EOF'\ndef g(x):\n    y = x\n    y = (y * 1103515245 + 12345) & 0x7fffffff\n    y ^= (y >> 7)\n    y = (y * 2654435761) & 0xffffffff\n    y ^= (y >> 11)\n    return y & 0xffffff\n\nTARGET = 16710899\nEOF\n",
+   "prompt": "pre.py defines a scrambling function g(x) and a TARGET. Find an integer x in [0, 9999] with g(x) == TARGET and write x (decimal) to answer.txt. The grader recomputes g(x).",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport pre\ntry:\n    a = open('answer.txt').read().strip(); v = int(a)\nexcept Exception:\n    print('FAIL: no int'); raise SystemExit\nok = (0 <= v <= 9999 and pre.g(v) == pre.TARGET)\nprint('PASS' if ok else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport pre\nfor x in range(10000):\n    if pre.g(x) == pre.TARGET:\n        open('answer.txt', 'w').write(str(x)); break\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  },
+  {
+   "id": "re_hash_crack",
+   "category": "crackme",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncat > auth.py <<'EOF'\ndef H(pw):\n    h = 0x1505\n    for c in pw:\n        h = ((h << 5) + h + ord(c)) & 0xffffffff\n    h ^= (h >> 13)\n    return h & 0xffffff\n\nSTORED = 10045128\nEOF\n",
+   "prompt": "auth.py hashes a password with H() and stores STORED = H(secret) for a 4-letter lowercase password. Find any password whose H() equals STORED and write it to answer.txt. The grader recomputes H(answer).",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport auth\ntry: a = open('answer.txt').read().strip()\nexcept Exception: a = ''\nprint('PASS' if auth.H(a) == auth.STORED else 'FAIL: ' + repr(a))\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport auth, itertools, string\nfor t in itertools.product(string.ascii_lowercase, repeat=4):\n    pw = ''.join(t)\n    if auth.H(pw) == auth.STORED:\n        open('answer.txt', 'w').write(pw); break\nPY\n",
+   "self_test_passed": true,
+   "notes": "ctf/reverse-engineering harvest"
+  }
+ ]
+}

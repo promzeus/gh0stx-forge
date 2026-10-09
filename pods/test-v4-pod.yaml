@@ -1,0 +1,53 @@
+# BF16 capability-гейт pruned_v4 (до абляции): арифметика + precision/RU/code/coherence/general + offsec-знание.
+# g6e.24xlarge (4×L40S), vLLM cpu-offload, auto-TP. Self-contained: pull→serve→probe→report→self-exit.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-v4
+  namespace: distill
+  labels: { app: test-v4 }
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    workload: nvfp4-quant
+    node.kubernetes.io/instance-type: g6e.24xlarge
+  tolerations:
+    - { key: "test-gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "nvidia.com/gpu", effect: "NoSchedule", operator: "Exists" }
+    - { key: "karpenter.sh/disruption", effect: "NoSchedule", operator: "Exists" }
+  containers:
+    - name: test
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /data/test_v4.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          python3 -m pip install -q -U awscli 2>&1 | tail -1 || true
+          mkdir -p /data/pruned_v4 /data/tmp
+          aws s3 cp s3://$B/heal/pruned_quality_probe.sh /data/probe.sh >/dev/null; chmod +x /data/probe.sh
+          echo "[pod] pull pruned_v4 (~282G) $(date -u)"
+          aws s3 sync s3://$B/pruned_v4/ /data/pruned_v4/ --no-progress 2>&1 | tail -1
+          echo "[pod] ===== PROBE pruned_v4 $(date -u) ====="
+          bash /data/probe.sh /data/pruned_v4 || echo "[pod] probe rc=$?"
+          echo "[pod] ===== TEST_V4_DONE $(date -u) ====="
+          sleep 60
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/data/.hf" }
+        - { name: TMPDIR, value: "/data/tmp" }
+        - { name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True" }
+        - { name: VLLM_LOGGING_LEVEL, value: "WARNING" }
+      resources:
+        requests: { cpu: "16", memory: 600Gi, nvidia.com/gpu: 4 }
+        limits: { nvidia.com/gpu: 4 }
+      volumeMounts:
+        - { name: data, mountPath: /data }
+        - { name: dshm, mountPath: /dev/shm }
+  volumes:
+    - name: data
+      emptyDir: { sizeLimit: 1000Gi }
+    - name: dshm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }

@@ -1,0 +1,124 @@
+{
+ "tasks": [
+  {
+   "id": "alg_longest_palindrome",
+   "category": "string",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(1201)\nn=4000\ns=[random.choice('abcd') for _ in range(n)]\nhalf=[random.choice('abcd') for _ in range(150)]\npal=half+[random.choice('abcd')]+half[::-1]\ns[1500:1500+len(pal)]=pal\nopen('input.txt','w').write(''.join(s)+'\\n')\nPY",
+   "prompt": "input.txt holds one line: a string of lowercase letters (length 4000). Find the length of the longest palindromic substring (a contiguous substring that reads the same forwards and backwards). Write that single integer to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\ns=open('input.txt').read().strip()\nn=len(s); best=1\nfor c in range(n):\n    l,r=c,c\n    while l>=0 and r<n and s[l]==s[r]: l-=1; r+=1\n    if r-l-1>best: best=r-l-1\n    l,r=c,c+1\n    while l>=0 and r<n and s[l]==s[r]: l-=1; r+=1\n    if r-l-1>best: best=r-l-1\nok = os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(best)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\ns=open('input.txt').read().strip()\nn=len(s); best=1\nfor c in range(n):\n    l,r=c,c\n    while l>=0 and r<n and s[l]==s[r]: l-=1; r+=1\n    if r-l-1>best: best=r-l-1\n    l,r=c,c+1\n    while l>=0 and r<n and s[l]==s[r]: l-=1; r+=1\n    if r-l-1>best: best=r-l-1\nopen('answer.txt','w').write(str(best))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_edit_distance",
+   "category": "string",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(207)\na=''.join(random.choice('acgt') for _ in range(1200))\nb=''.join(random.choice('acgt') for _ in range(1200))\nopen('input.txt','w').write(a+'\\n'+b+'\\n')\nPY",
+   "prompt": "input.txt holds two lines, string A then string B (each 1200 letters). Compute the Levenshtein edit distance between A and B: the minimum number of single-character insertions, deletions, or substitutions to turn A into B. Write that integer to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nL=open('input.txt').read().splitlines()\na,b=L[0],L[1]\nm,n=len(a),len(b)\nprev=list(range(n+1))\nfor i in range(1,m+1):\n    cur=[i]+[0]*n; ai=a[i-1]\n    for j in range(1,n+1):\n        c=0 if ai==b[j-1] else 1\n        v=prev[j-1]+c\n        if prev[j]+1<v: v=prev[j]+1\n        if cur[j-1]+1<v: v=cur[j-1]+1\n        cur[j]=v\n    prev=cur\nd=prev[n]\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(d)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nL=open('input.txt').read().splitlines()\na,b=L[0],L[1]\nm,n=len(a),len(b)\nprev=list(range(n+1))\nfor i in range(1,m+1):\n    cur=[i]+[0]*n; ai=a[i-1]\n    for j in range(1,n+1):\n        c=0 if ai==b[j-1] else 1\n        v=prev[j-1]+c\n        if prev[j]+1<v: v=prev[j]+1\n        if cur[j-1]+1<v: v=cur[j-1]+1\n        cur[j]=v\n    prev=cur\nopen('answer.txt','w').write(str(prev[n]))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_max_subarray",
+   "category": "array",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(413)\nn=200000\narr=[random.randint(-1000,1000) for _ in range(n)]\nopen('input.txt','w').write(str(n)+'\\n'+' '.join(map(str,arr))+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is n (200000); line 2 is n space-separated integers (each between -1000 and 1000). Find the maximum sum of any non-empty contiguous subarray. Write that integer to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nt=open('input.txt').read().split()\nn=int(t[0]); a=list(map(int,t[1:1+n]))\nbest=cur=a[0]\nfor x in a[1:]:\n    cur = x if cur+x < x else cur+x\n    if cur>best: best=cur\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(best)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nt=open('input.txt').read().split()\nn=int(t[0]); a=list(map(int,t[1:1+n]))\nbest=cur=a[0]\nfor x in a[1:]:\n    cur = x if cur+x < x else cur+x\n    if cur>best: best=cur\nopen('answer.txt','w').write(str(best))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_interval_union",
+   "category": "interval",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(511)\nn=100000\nlines=[str(n)]\nfor _ in range(n):\n    s=random.randint(0,10**9)\n    e=s+random.randint(1,10000)\n    lines.append(str(s)+' '+str(e))\nopen('input.txt','w').write('\\n'.join(lines)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is n (100000); each of the next n lines has two integers s e describing the half-open interval [s, e) (e exclusive). Compute the total length covered by the union of all n intervals. Write that integer to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nt=open('input.txt').read().split()\nn=int(t[0]); nums=t[1:]\niv=sorted((int(nums[2*i]),int(nums[2*i+1])) for i in range(n))\ntotal=0; cs=ce=None\nfor s,e in iv:\n    if cs is None: cs,ce=s,e\n    elif s>ce:\n        total+=ce-cs; cs,ce=s,e\n    elif e>ce: ce=e\nif cs is not None: total+=ce-cs\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(total)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nt=open('input.txt').read().split()\nn=int(t[0]); nums=t[1:]\niv=sorted((int(nums[2*i]),int(nums[2*i+1])) for i in range(n))\ntotal=0; cs=ce=None\nfor s,e in iv:\n    if cs is None: cs,ce=s,e\n    elif s>ce:\n        total+=ce-cs; cs,ce=s,e\n    elif e>ce: ce=e\nif cs is not None: total+=ce-cs\nopen('answer.txt','w').write(str(total))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_sliding_window_max",
+   "category": "array",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(619)\nn=200000; k=1000\narr=[random.randint(0,10**6) for _ in range(n)]\nopen('input.txt','w').write(str(n)+' '+str(k)+'\\n'+' '.join(map(str,arr))+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is n and k (n=200000, k=1000); line 2 is n non-negative integers. For every contiguous window of exactly k elements, take its maximum, and sum those maxima over all n-k+1 windows. Write that total sum (a single integer) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nfrom collections import deque\nt=open('input.txt').read().split()\nn=int(t[0]); k=int(t[1]); a=list(map(int,t[2:2+n]))\ndq=deque(); total=0\nfor i,x in enumerate(a):\n    while dq and a[dq[-1]]<=x: dq.pop()\n    dq.append(i)\n    if dq[0]<=i-k: dq.popleft()\n    if i>=k-1: total+=a[dq[0]]\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(total)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nfrom collections import deque\nt=open('input.txt').read().split()\nn=int(t[0]); k=int(t[1]); a=list(map(int,t[2:2+n]))\ndq=deque(); total=0\nfor i,x in enumerate(a):\n    while dq and a[dq[-1]]<=x: dq.pop()\n    dq.append(i)\n    if dq[0]<=i-k: dq.popleft()\n    if i>=k-1: total+=a[dq[0]]\nopen('answer.txt','w').write(str(total))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_dijkstra_grid",
+   "category": "graph",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(727)\nN=400\nrows=[str(N)]\nfor _ in range(N):\n    rows.append(' '.join(str(random.randint(1,99)) for _ in range(N)))\nopen('input.txt','w').write('\\n'.join(rows)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is N (400); the next N lines each hold N integers (1..99), a grid of cell weights. Starting at the top-left cell (0,0) and moving one step up/down/left/right at a time, reach the bottom-right cell (N-1,N-1). The cost of a path is the sum of the weights of every cell it visits, including both the start and the end cell. Write the minimum possible path cost to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os, heapq\nt=open('input.txt').read().split()\nN=int(t[0]); g=[[int(t[1+r*N+c]) for c in range(N)] for r in range(N)]\nINF=float('inf')\ndist=[[INF]*N for _ in range(N)]\ndist[0][0]=g[0][0]\npq=[(g[0][0],0,0)]\nwhile pq:\n    d,r,c=heapq.heappop(pq)\n    if d>dist[r][c]: continue\n    for dr,dc in ((1,0),(-1,0),(0,1),(0,-1)):\n        nr,nc=r+dr,c+dc\n        if 0<=nr<N and 0<=nc<N:\n            nd=d+g[nr][nc]\n            if nd<dist[nr][nc]:\n                dist[nr][nc]=nd; heapq.heappush(pq,(nd,nr,nc))\nans=dist[N-1][N-1]\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(ans)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport heapq\nt=open('input.txt').read().split()\nN=int(t[0]); g=[[int(t[1+r*N+c]) for c in range(N)] for r in range(N)]\nINF=float('inf')\ndist=[[INF]*N for _ in range(N)]\ndist[0][0]=g[0][0]\npq=[(g[0][0],0,0)]\nwhile pq:\n    d,r,c=heapq.heappop(pq)\n    if d>dist[r][c]: continue\n    for dr,dc in ((1,0),(-1,0),(0,1),(0,-1)):\n        nr,nc=r+dr,c+dc\n        if 0<=nr<N and 0<=nc<N:\n            nd=d+g[nr][nc]\n            if nd<dist[nr][nc]:\n                dist[nr][nc]=nd; heapq.heappush(pq,(nd,nr,nc))\nopen('answer.txt','w').write(str(dist[N-1][N-1]))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_connected_components",
+   "category": "graph",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(829)\nN=100000; M=130000\nlines=[str(N)+' '+str(M)]\nfor _ in range(M):\n    u=random.randrange(N); v=random.randrange(N)\n    lines.append(str(u)+' '+str(v))\nopen('input.txt','w').write('\\n'.join(lines)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is N and M (N=100000 nodes labeled 0..N-1, M=130000 edges); each of the next M lines has two node ids u v meaning an undirected edge. Count the number of connected components (isolated nodes with no edges each count as their own component). Write that integer to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os, sys\nsys.setrecursionlimit(10000)\nt=open('input.txt').read().split()\nN=int(t[0]); M=int(t[1])\np=list(range(N))\ndef f(x):\n    while p[x]!=x:\n        p[x]=p[p[x]]; x=p[x]\n    return x\nidx=2\nfor _ in range(M):\n    u=int(t[idx]); v=int(t[idx+1]); idx+=2\n    ru,rv=f(u),f(v)\n    if ru!=rv: p[ru]=rv\ncomp=sum(1 for i in range(N) if f(i)==i)\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(comp)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nt=open('input.txt').read().split()\nN=int(t[0]); M=int(t[1])\np=list(range(N))\ndef f(x):\n    while p[x]!=x:\n        p[x]=p[p[x]]; x=p[x]\n    return x\nidx=2\nfor _ in range(M):\n    u=int(t[idx]); v=int(t[idx+1]); idx+=2\n    ru,rv=f(u),f(v)\n    if ru!=rv: p[ru]=rv\ncomp=sum(1 for i in range(N) if f(i)==i)\nopen('answer.txt','w').write(str(comp))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_coin_change_ways",
+   "category": "dp",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\ncoins=[1,2,5,10,20,25,50,100]\namount=30000\nopen('input.txt','w').write(str(amount)+'\\n'+' '.join(map(str,coins))+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is a target amount (30000); line 2 is the available coin denominations (space-separated). Each denomination may be used any number of times. Count the number of distinct multisets of coins that sum to exactly the amount (order does not matter). Write that exact integer (it is very large) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nL=open('input.txt').read().splitlines()\namount=int(L[0]); coins=list(map(int,L[1].split()))\nways=[0]*(amount+1); ways[0]=1\nfor c in coins:\n    for a in range(c,amount+1):\n        ways[a]+=ways[a-c]\nans=ways[amount]\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(ans)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nL=open('input.txt').read().splitlines()\namount=int(L[0]); coins=list(map(int,L[1].split()))\nways=[0]*(amount+1); ways[0]=1\nfor c in coins:\n    for a in range(c,amount+1):\n        ways[a]+=ways[a-c]\nopen('answer.txt','w').write(str(ways[amount]))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_knapsack01",
+   "category": "dp",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(1013)\nN=800; W=4000\nlines=[str(N)+' '+str(W)]\nfor _ in range(N):\n    w=random.randint(1,300); v=random.randint(1,1000)\n    lines.append(str(w)+' '+str(v))\nopen('input.txt','w').write('\\n'.join(lines)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is N and W (N=800 items, W=4000 capacity); each of the next N lines has an item's weight and value (w v). Select a subset of items whose total weight is at most W and whose total value is maximal (each item used at most once). Write the maximum total value to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nt=open('input.txt').read().split()\nN=int(t[0]); W=int(t[1])\nitems=[(int(t[2+2*i]),int(t[3+2*i])) for i in range(N)]\ndp=[0]*(W+1)\nfor w,v in items:\n    for cap in range(W,w-1,-1):\n        c=dp[cap-w]+v\n        if c>dp[cap]: dp[cap]=c\nans=dp[W]\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(ans)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nt=open('input.txt').read().split()\nN=int(t[0]); W=int(t[1])\nitems=[(int(t[2+2*i]),int(t[3+2*i])) for i in range(N)]\ndp=[0]*(W+1)\nfor w,v in items:\n    for cap in range(W,w-1,-1):\n        c=dp[cap-w]+v\n        if c>dp[cap]: dp[cap]=c\nopen('answer.txt','w').write(str(dp[W]))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_crt",
+   "category": "number-theory",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(1117)\nprimes=[9973,9967,9949,9941,9931,9929,9923,9907]\nlines=[str(len(primes))]\nfor p in primes:\n    r=random.randrange(p)\n    lines.append(str(r)+' '+str(p))\nopen('input.txt','w').write('\\n'.join(lines)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is k (the number of congruences); each of the next k lines has two integers r m, meaning x is congruent to r modulo m. The moduli are pairwise coprime. Find the unique smallest non-negative integer x satisfying all k congruences simultaneously. Write x to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nt=open('input.txt').read().split()\nk=int(t[0])\nrs=[int(t[1+2*i]) for i in range(k)]\nms=[int(t[2+2*i]) for i in range(k)]\nx=0; M=1\nfor r,m in zip(rs,ms):\n    inv=pow(M%m,-1,m)\n    x=x+M*(((r-x)*inv)%m)\n    M*=m\nx%=M\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(x)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nt=open('input.txt').read().split()\nk=int(t[0])\nrs=[int(t[1+2*i]) for i in range(k)]\nms=[int(t[2+2*i]) for i in range(k)]\nx=0; M=1\nfor r,m in zip(rs,ms):\n    inv=pow(M%m,-1,m)\n    x=x+M*(((r-x)*inv)%m)\n    M*=m\nopen('answer.txt','w').write(str(x%M))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_eval_expression",
+   "category": "parsing",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(1223)\ndef expr(d):\n    parts=[term(d)]\n    for _ in range(random.randint(1,3)):\n        parts.append(random.choice(['+','-'])); parts.append(term(d))\n    return ''.join(parts)\ndef term(d):\n    parts=[factor(d)]\n    for _ in range(random.randint(0,2)):\n        parts.append('*'); parts.append(factor(d))\n    return ''.join(parts)\ndef factor(d):\n    if d<=0 or random.random()<0.5:\n        return str(random.randint(0,99))\n    return '('+expr(d-1)+')'\ne=expr(4)\nopen('input.txt','w').write(e+'\\n')\nPY",
+   "prompt": "input.txt holds one line: an arithmetic expression over non-negative integers using +, -, *, and parentheses, with standard operator precedence (* binds tighter than + and -). Evaluate it exactly and write the resulting integer (which may be negative) to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\ne=open('input.txt').read().strip()\nassert set(e)<=set('0123456789+-*() ')\nval=eval(compile(e,'<e>','eval'),{'__builtins__':{}},{})\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(val)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\ne=open('input.txt').read().strip()\nval=eval(compile(e,'<e>','eval'),{'__builtins__':{}},{})\nopen('answer.txt','w').write(str(val))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  },
+  {
+   "id": "alg_game_of_life",
+   "category": "simulation",
+   "setup_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nimport random\nrandom.seed(1231)\nH=60; W=60; N=120\ngrid=[''.join('1' if random.random()<0.35 else '0' for _ in range(W)) for _ in range(H)]\nopen('input.txt','w').write(str(H)+' '+str(W)+'\\n'+str(N)+'\\n'+'\\n'.join(grid)+'\\n')\nPY",
+   "prompt": "input.txt: line 1 is H W (60 60); line 2 is N (120); the next H lines each hold W characters ('0' dead, '1' live) giving the initial grid. Evolve it N generations under Conway's Game of Life rules (a live cell with 2 or 3 live neighbors survives, a dead cell with exactly 3 live neighbors is born; the 8 neighbors are the surrounding cells and cells outside the grid are always dead). Write the number of live cells after N generations to answer.txt.",
+   "grader_sh": "#!/usr/bin/env bash\ncd \"$W\" || exit 1\npython3 - <<'PY'\nimport os\nL=open('input.txt').read().splitlines()\nH,W=map(int,L[0].split()); N=int(L[1])\ng=[[1 if ch=='1' else 0 for ch in L[2+r]] for r in range(H)]\nfor _ in range(N):\n    ng=[[0]*W for _ in range(H)]\n    for r in range(H):\n        for c in range(W):\n            cnt=0\n            for dr in (-1,0,1):\n                for dc in (-1,0,1):\n                    if dr==0 and dc==0: continue\n                    nr,nc=r+dr,c+dc\n                    if 0<=nr<H and 0<=nc<W: cnt+=g[nr][nc]\n            ng[r][c]=1 if (cnt==3 or (g[r][c] and cnt==2)) else 0\n    g=ng\nans=sum(sum(row) for row in g)\nok=os.path.exists('answer.txt') and open('answer.txt').read().strip()==str(ans)\nprint('PASS' if ok else 'FAIL')\nPY",
+   "reference_solution_sh": "#!/usr/bin/env bash\nset -e\ncd \"$W\"\npython3 - <<'PY'\nL=open('input.txt').read().splitlines()\nH,W=map(int,L[0].split()); N=int(L[1])\ng=[[1 if ch=='1' else 0 for ch in L[2+r]] for r in range(H)]\nfor _ in range(N):\n    ng=[[0]*W for _ in range(H)]\n    for r in range(H):\n        for c in range(W):\n            cnt=0\n            for dr in (-1,0,1):\n                for dc in (-1,0,1):\n                    if dr==0 and dc==0: continue\n                    nr,nc=r+dr,c+dc\n                    if 0<=nr<H and 0<=nc<W: cnt+=g[nr][nc]\n            ng[r][c]=1 if (cnt==3 or (g[r][c] and cnt==2)) else 0\n    g=ng\nopen('answer.txt','w').write(str(sum(sum(row) for row in g)))\nPY",
+   "self_test_passed": true,
+   "notes": "hard/algorithm-challenge; deterministic single instance, stdlib python3 only"
+  }
+ ]
+}

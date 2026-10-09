@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    kubernetes.io/metadata.name: distill
+    purpose: moe-prune-heal-experiment
+  name: distill
+spec:
+  finalizers:
+  - kubernetes

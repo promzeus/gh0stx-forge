@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: moe-dryrun
+  namespace: distill
+  labels:
+    app: moe-dryrun
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    workload: gpu-distill
+  tolerations:
+    - key: "test-gpu"
+      effect: "NoSchedule"
+      operator: "Exists"
+    - key: "nvidia.com/gpu"
+      effect: "NoSchedule"
+      operator: "Exists"
+  containers:
+    - name: dryrun
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -uo pipefail
+          PY=$(command -v python3 || command -v python)
+          echo "[pod] installing accelerate + hf_transfer"
+          "$PY" -m pip install -q --no-cache-dir accelerate hf_transfer 2>&1 | tail -2 || true
+          echo "[pod] launching pipeline dry-run"
+          "$PY" /scripts/pipeline_dryrun.py
+      env:
+        - name: MODEL_ID
+          value: "Qwen/Qwen3-30B-A3B"
+        - name: HF_HOME
+          value: /workspace/hf
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
+        - name: TMPDIR
+          value: /workspace/tmp
+      resources:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+          nvidia.com/gpu: "4"
+        limits:
+          nvidia.com/gpu: "4"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: scripts
+          mountPath: /scripts
+        - name: dshm
+          mountPath: /dev/shm
+  volumes:
+    - name: workspace
+      persistentVolumeClaim:
+        claimName: distill-workspace
+    - name: scripts
+      configMap:
+        name: dryrun-script
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 32Gi

@@ -1,0 +1,73 @@
+# abliterix run config — Qwen3.8-27B (dense) uncensor, capability-preserving.
+# Dense-27B: bf16 ~54GB or NF4 ~15GB — both fit one GB10 (121GB unified).
+# Run: pip install -U abliterix; abliterix --config abliterix.toml --non-interactive \
+#      --non-interactive-output-dir ./aeon27b-abliterated
+# NVFP4 repack after: abliterix-abliterate-fp4 (no bf16 blow-up), serve in aeon-vllm.
+
+[model]
+dtype_fallback_order = ["bfloat16"]
+quant_method = "none"          # 27B bf16 fits GB10; use "bnb_4bit" if tight
+use_torch_compile = false
+device_map = "auto"
+# GB10 is one unified device; give it headroom, spill rest to cpu (unified anyway)
+max_memory = {0 = "100GiB", cpu = "60GiB"}
+
+[inference]
+batch_size = 0
+max_batch_size = 8
+max_gen_tokens = 150
+
+[steering]
+# SRA = Surgical Refusal Ablation with concept-guided spectral cleaning — the
+# capability-preserving method (vs plain "mean"). Directly addresses our fear of
+# losing capability/coherence (the gh0stx IMEI symptom).
+vector_method = "sra"
+sra_base_method = "mean"
+sra_n_atoms = 8
+sra_ridge_alpha = 0.01
+decay_kernel = "linear"
+# Subtract ONLY the safety-specific signal, keep the benign direction — key knob
+# for not degrading reasoning.
+orthogonal_projection = true
+weight_normalization = "full"
+full_norm_lora_rank = 3
+
+[optimization]
+num_trials = 100               # more trials = better "coherent unlock"; 122b used 25 for cost
+num_warmup_trials = 30
+checkpoint_dir = "checkpoints_qwen38_27b"
+
+[kl]
+scale = 1.0
+token_count = 3
+target = 0.01                  # below this KL, refusal objective dominates
+prune_threshold = 5.0          # skip compliance eval on high-KL trials (faster search)
+
+[detection]
+# Coherence judge (AEON's method): score the answer AFTER </think>. Needs OPENROUTER_API_KEY.
+# Makes the run non-reproducible (service drift) — for the final pick, not benchmarking.
+llm_judge = true
+llm_judge_model = "google/gemini-3.1-flash-lite-preview"
+llm_judge_batch_size = 10
+llm_judge_concurrency = 10
+
+[display]
+print_responses = false
+non_interactive = true
+
+[benign_prompts]
+dataset = "datasets/good_1000"
+split = "train[:800]"
+column = "prompt"
+[target_prompts]
+dataset = "datasets/harmful_1000"
+split = "train[:800]"
+column = "prompt"
+[benign_eval_prompts]
+dataset = "datasets/good_1000"
+split = "train[800:]"
+column = "prompt"
+[target_eval_prompts]
+dataset = "datasets/harmful_1000"
+split = "train[800:]"
+column = "prompt"

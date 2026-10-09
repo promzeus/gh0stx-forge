@@ -1,0 +1,69 @@
+# GLM-4.6 stock knowledge+refusal probe (CPU). Stages weights to S3, runs probe,
+# self-terminates: Job activeDeadlineSeconds (hard cap) + ttl (deletes pod) ->
+# node empties -> Karpenter consolidateAfter 5m -> node gone. No overnight idle.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glm46-probe
+  namespace: distill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 25200      # 7h hard kill
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: glm46-probe }
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"   # hold node while running; freed when pod TTL-deleted
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector:
+        node.kubernetes.io/instance-type: r7i.48xlarge   # cheapest that fits 665GB; any AZ (S3 is region-wide, no PVC)
+      tolerations:
+        - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+        - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+      containers:
+        - name: probe
+          image: vllm/vllm-openai:latest
+          command: ["/bin/bash","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              B=ai-monitoring-test-123456789012
+              echo "[job] start $(date -u)"
+              python3 -m pip install -q -U transformers accelerate safetensors huggingface_hub hf_xet sentencepiece tiktoken blobfile awscli 2>&1 | tail -1
+              export HF_XET_HIGH_PERFORMANCE=1 HF_HOME=/model/hf
+              mkdir -p /model/glm46 /work
+              aws s3 cp s3://$B/glm46/glm46_probe.py /work/glm46_probe.py
+              ( while sleep 600; do aws s3 cp /model/glm46_probe_out.json s3://$B/glm46_probe_out.json >/dev/null 2>&1 || true; done ) &
+              if aws s3 ls s3://$B/glm46-base/config.json >/dev/null 2>&1; then
+                echo "[job] sync weights from S3 (already staged, in-region) $(date -u)"
+                aws s3 sync s3://$B/glm46-base/ /model/glm46 --no-progress 2>&1 | tail -1
+              else
+                echo "[job] download GLM-4.6 from HF $(date -u)"
+                hf download zai-org/GLM-4.6 --local-dir /model/glm46 --exclude "*.gguf" 2>&1 | tail -3
+                aws s3 sync /model/glm46/ s3://$B/glm46-base/ --no-progress 2>&1 | tail -1
+              fi
+              echo "[job] size:"; du -sh /model/glm46
+              test -f /model/glm46/config.json || { echo "[job] FATAL: config.json missing"; exit 1; }
+              n=$(ls /model/glm46/*.safetensors 2>/dev/null | wc -l); echo "[job] safetensors shards: $n"
+              [ "$n" -gt 0 ] || { echo "[job] FATAL: no weight shards"; exit 1; }
+              echo "[job] ===== PROBE $(date -u) ====="
+              cd /work
+              OMP_NUM_THREADS=180 python3 glm46_probe.py --model /model/glm46 --out /model/glm46_probe_out.json 2>&1
+              aws s3 cp /model/glm46_probe_out.json s3://$B/glm46_probe_out.json
+              echo "[job] ===== GLM46_PROBE_DONE $(date -u) ====="
+          env:
+            - { name: AWS_REGION, value: "eu-north-1" }
+            - { name: TMPDIR, value: "/tmp" }
+          resources:
+            requests: { cpu: "80", memory: 1400Gi }
+          volumeMounts:
+            - { name: model, mountPath: /model }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: model
+          emptyDir: { sizeLimit: 700Gi }
+        - name: tmp
+          emptyDir: { sizeLimit: 60Gi }

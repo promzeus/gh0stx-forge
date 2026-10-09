@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: gh0stx-qlora-ddp, namespace: distill}
+spec:
+  backoffLimit: 1              # short run (~2h); one auto-retry on spot reclaim is fine
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 21600 # 6h ceiling — fast path should finish in ~2h
+  template:
+    metadata: {labels: {app: gh0stx-qlora-ddp}}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {karpenter.sh/nodepool: gpu-distill-h200}
+      tolerations:
+      - {key: test-gpu, effect: NoSchedule}
+      containers:
+      - name: train
+        image: public.ecr.aws/docker/library/python:3.12
+        command: ["bash","/code/entrypoint.sh"]
+        env:
+        - {name: BASE_DIR, value: /base}
+        - {name: BASE_S3, value: s3://ai-monitoring-test-123456789012/decensored_v4}
+        - {name: DATA, value: /data/sft.jsonl}
+        - {name: OUT_DIR, value: /data/adapter}
+        - {name: S3_PREFIX, value: s3://ai-monitoring-test-123456789012/gh0stx-rft}
+        - {name: AWS_REGION, value: eu-north-1}
+        - {name: HF_HOME, value: /data/hf}
+        # data-parallel fast path: 8 full-model replicas, ~8x the pipelined device_map
+        - {name: FAST_DDP, value: "1"}
+        - {name: EPOCHS, value: "3"}
+        - {name: MAXLEN, value: "8192"}
+        # effective batch = 8 replicas x 1 accum = 8, matching the prior device_map run
+        - {name: GRAD_ACCUM, value: "1"}
+        - {name: SAVE_STEPS, value: "30"}
+        - {name: PYTORCH_CUDA_ALLOC_CONF, value: "expandable_segments:True"}
+        - {name: NCCL_ASYNC_ERROR_HANDLING, value: "1"}
+        volumeMounts:
+        - {name: base, mountPath: /base}
+        - {name: code, mountPath: /code}
+        - {name: data, mountPath: /data}
+        - {name: shm, mountPath: /dev/shm}
+        resources:
+          requests: {cpu: "16", memory: 200Gi, nvidia.com/gpu: 8}
+          limits: {memory: 1600Gi, nvidia.com/gpu: 8}
+      volumes:
+      - {name: base, emptyDir: {sizeLimit: 400Gi}}
+      - {name: code, configMap: {name: gh0stx-qlora-code}}
+      - {name: data, emptyDir: {sizeLimit: 60Gi}}
+      - {name: shm, emptyDir: {medium: Memory, sizeLimit: 32Gi}}

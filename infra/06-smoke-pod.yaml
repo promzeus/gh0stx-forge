@@ -1,0 +1,69 @@
+# Smoke as a bare Pod (no Job backoff) so it waits in Pending until Karpenter
+# gets a spot node, then runs once. Validates: node join, NVIDIA driver,
+# device-plugin (8 GPU), torch CUDA, PVC mount/write. Warms the vllm image too.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smoke-gpu
+  namespace: distill
+  labels:
+    app: smoke-gpu
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    workload: gpu-distill
+  tolerations:
+    - key: "gpu-distill"
+      effect: "NoSchedule"
+      operator: "Exists"
+    - key: "nvidia.com/gpu"
+      effect: "NoSchedule"
+      operator: "Exists"
+  containers:
+    - name: smoke
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -uo pipefail
+          PY=$(command -v python3 || command -v python)
+          echo "===== node ====="; echo "NODE=$NODE_NAME  PY=$PY"
+          echo "===== nvidia-smi ====="; nvidia-smi
+          echo "===== torch / cuda ====="
+          "$PY" -c "import torch,transformers; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available(), 'gpus', torch.cuda.device_count()); [print(i, torch.cuda.get_device_name(i)) for i in range(torch.cuda.device_count())]; print('transformers', transformers.__version__)"
+          echo "===== fp8 support (Ada L40S) ====="
+          "$PY" -c "import torch; print('bf16', torch.cuda.is_bf16_supported()); print('fp8_e4m3', hasattr(torch,'float8_e4m3fn'))"
+          "$PY" -c "import vllm; print('vllm', vllm.__version__)" || echo "vllm import skipped"
+          echo "===== workspace (PVC) ====="; df -h /workspace
+          echo "smoke-ok $(date -u)" > /workspace/smoke-ok.txt && cat /workspace/smoke-ok.txt
+          echo "===== SMOKE PASSED ====="
+          sleep 5
+      env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HF_HOME
+          value: /workspace/hf
+        - name: TMPDIR
+          value: /workspace/tmp
+      resources:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+          nvidia.com/gpu: "4"
+        limits:
+          nvidia.com/gpu: "4"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: dshm
+          mountPath: /dev/shm
+  volumes:
+    - name: workspace
+      persistentVolumeClaim:
+        claimName: distill-workspace
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Gi

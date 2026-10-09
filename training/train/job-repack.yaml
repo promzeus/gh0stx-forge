@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: gh0stx-repack, namespace: distill}
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 172800
+  activeDeadlineSeconds: 14400
+  template:
+    metadata: {labels: {app: gh0stx-repack}}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector: {karpenter.sh/nodepool: cpu-prune}
+      tolerations:
+      - {key: cpu-prune, effect: NoSchedule}
+      containers:
+      - name: repack
+        image: public.ecr.aws/docker/library/python:3.12
+        command: ["bash","/code/repack_entry.sh"]
+        env:
+        - {name: BASE_S3, value: s3://ai-monitoring-test-123456789012/decensored_v4}
+        - {name: FUSED_S3, value: s3://ai-monitoring-test-123456789012/decensored_v4_fused}
+        - {name: RAW_DIR, value: /work/raw}
+        - {name: FUSED_DIR, value: /work/fused}
+        - {name: AWS_REGION, value: eu-north-1}
+        volumeMounts:
+        - {name: work, mountPath: /work}
+        - {name: code, mountPath: /code}
+        resources:
+          requests: {cpu: "32", memory: 96Gi, ephemeral-storage: 700Gi}
+          limits: {memory: 300Gi, ephemeral-storage: 1200Gi}
+      volumes:
+      - {name: work, emptyDir: {sizeLimit: 1200Gi}}
+      - {name: code, configMap: {name: gh0stx-qlora-code}}

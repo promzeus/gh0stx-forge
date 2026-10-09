@@ -1,0 +1,70 @@
+# RE-PRUNE v4: фикс арифметики на СТАДИИ ПРУНИНГА. Размер тот же (KEEP_FRAC 0.34 → ~174).
+# Изменения vs v3c: (1) MATH-домен обогащён хакерской арифметикой (перенос/заём/offset/hex/bitwise),
+# (2) offsec-корпус очищен (corpus_offsec_clean.json: без рефузалов/near-дублей, литеральные \n разэкранированы).
+# Свежий Phase A (VER=v4). Цель: pruned_v4 BF16 = 6/6 арифметика (проверяется ДО adjust/quant).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: reprune-v4
+  namespace: distill
+  labels: { app: reprune-v4 }
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  restartPolicy: Never
+  serviceAccountName: ai-monitoring-test
+  nodeSelector:
+    topology.kubernetes.io/zone: eu-north-1c
+  tolerations:
+    - { key: cpu-prune, effect: NoSchedule, operator: Exists }
+    - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+  containers:
+    - name: prune
+      image: vllm/vllm-openai:latest
+      command: ["/bin/bash","-lc"]
+      args:
+        - |
+          set -uo pipefail
+          exec > >(tee -a /pv/reprune_v4.log) 2>&1
+          B=ai-monitoring-test-123456789012
+          echo "[pod] deps $(date -u)"
+          python3 -m pip install -q -U accelerate safetensors awscli datasets 2>&1 | tail -1 || true
+          python3 -m pip install -q -U "transformers==5.12.1" 2>&1 | tail -1 || true
+          mkdir -p /work/corpus && cd /work
+          aws s3 cp s3://$B/heal/pipeline_reap.py . >/dev/null
+          aws s3 cp s3://$B/heal/calib_corpus.py . >/dev/null
+          aws s3 cp s3://$B/corpus/corpus_offsec_clean.json /work/corpus/ >/dev/null
+          aws s3 cp s3://$B/corpus/corpus_crypto.json /work/corpus/ >/dev/null
+          echo "[pod] corpus:"; ls -la /work/corpus
+          if [ ! -f /pv/397b/config.json ]; then echo "[pod] 397b sync"; mkdir -p /pv/397b; aws s3 sync s3://$B/qwen3.5-397b-bf16/ /pv/397b/ --no-progress 2>&1 | tail -1; fi
+          echo "[pod] 397b:"; du -sh /pv/397b 2>/dev/null
+          # свежий Phase A для v4
+          rm -rf /pv/run397b_v3/pruned_v4 /pv/run397b_v3/importance_v4.json /pv/run397b_v3/counts_v4.json 2>/dev/null || true
+          # освобождаем место: старый провальный 7-доменный v3 (pruned_v3) больше не нужен
+          rm -rf /pv/run397b_v3/pruned_v3 2>/dev/null || true
+          echo "[pod] PVC:"; df -h /pv | tail -1
+          echo "[pod] ===== RE-PRUNE v4 (обогащённый MATH + чистый offsec, KEEP_FRAC 0.34, свежий Phase A) ====="
+          MODEL_ID=/pv/397b OUT_DIR=/pv/run397b_v3 DEVICE_MAP=cpu CORPUS_DIR=/work/corpus \
+            PRUNE_VER=v4 CALIB_TARGET=1024 MAXLEN=2048 USE_HF=1 KEEP_FRAC=0.34 \
+            python3 pipeline_reap.py 2>&1 | grep -vE "it/s\]"
+          echo "[pod] ===== save pruned_v4 + importance/counts -> S3 ====="
+          aws s3 sync /pv/run397b_v3/pruned_v4/ s3://$B/pruned_v4/ --no-progress 2>&1 | tail -1
+          aws s3 cp /pv/run397b_v3/importance_v4.json s3://$B/pruned_v4_importance.json 2>&1 | tail -1 || true
+          aws s3 cp /pv/run397b_v3/counts_v4.json s3://$B/pruned_v4_counts.json 2>&1 | tail -1 || true
+          aws s3 cp /pv/run397b_v3/prune_result_v4.json s3://$B/pruned_v4_result.json 2>&1 | tail -1 || true
+          echo "[pod] ===== REPRUNE_V4_DONE $(date -u) ====="
+          sleep 300
+      env:
+        - { name: AWS_REGION, value: "eu-north-1" }
+        - { name: HF_HOME, value: "/tmp/hf" }
+        - { name: TMPDIR, value: "/tmp" }
+      resources:
+        requests: { cpu: "80", memory: 1400Gi }
+      volumeMounts:
+        - { name: pv, mountPath: /pv }
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - name: pv
+      persistentVolumeClaim: { claimName: distill-data }
+    - name: tmp
+      emptyDir: { sizeLimit: 60Gi }

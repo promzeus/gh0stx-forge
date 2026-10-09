@@ -1,0 +1,66 @@
+# [1b] PRUNE for GLM-4.6: REAP expert-prune abliterated 353B -> ~151B (KEEP_FRAC 0.40, 64/160 experts)
+#   so NVFP4 (~85GB) + fp8 KV (120k) fits one GB10. Domain-balanced router-hit counts (calib_corpus).
+# r7i.48xlarge (1536GB CPU). Input s3 glm46-abliterated (705GB) -> output s3 glm46-pruned (~300GB bf16).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: glm46-prune
+  namespace: distill
+spec:
+  backoffLimit: 3                   # spot reclaim auto-retry
+  activeDeadlineSeconds: 28800      # 8h
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels: { app: glm46-prune }
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ai-monitoring-test
+      nodeSelector:
+        workload: glm-prune
+      tolerations:
+        - { key: glm-prune, effect: NoSchedule, operator: Exists }
+        - { key: karpenter.sh/disruption, effect: NoSchedule, operator: Exists }
+      containers:
+        - name: prune
+          image: vllm/vllm-openai:latest
+          command: ["/bin/bash","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              B=ai-monitoring-test-123456789012
+              echo "[job] start $(date -u)"
+              python3 -m pip install -q -U transformers accelerate datasets safetensors huggingface_hub hf_xet sentencepiece tiktoken blobfile awscli 2>&1 | tail -1
+              export HF_HOME=/model/hf TMPDIR=/tmp
+              mkdir -p /model/abl /work && cd /work
+              aws s3 cp s3://$B/glm46/pipeline_reap_glm.py ./pipeline_reap_glm.py
+              aws s3 cp s3://$B/glm46/calib_corpus.py      ./calib_corpus.py
+              echo "[job] sync abliterated from S3 $(date -u)"
+              aws s3 sync s3://$B/glm46-abliterated/ /model/abl --no-progress 2>&1 | tail -1
+              test -f /model/abl/config.json || { echo "[job] FATAL: abl config.json missing"; exit 1; }
+              echo "[job] disk before: $(df -h /model | tail -1)"
+              echo "[job] ===== REAP PRUNE GLM-4.6 (KEEP_FRAC=0.40 -> 64/160, calib 256) ====="
+              MODEL_ID=/model/abl OUT_DIR=/model PRUNED_DIR=/model/glm46-pruned \
+              KEEP_FRAC=0.40 CALIB_TARGET=128 MAXLEN=1024 USE_HF=1 DEVICE_MAP=cpu OMP_NUM_THREADS=180 \
+                stdbuf -oL python3 pipeline_reap_glm.py 2>&1 | grep --line-buffered -vE "Loading weights:"
+              test -f /model/glm46-pruned/config.json || { echo "[job] FATAL: prune produced no output"; exit 1; }
+              echo "[job] pruned size:"; du -sh /model/glm46-pruned
+              echo "[job] disk after: $(df -h /model | tail -1)"
+              echo "[job] ===== sync glm46-pruned -> S3 $(date -u) ====="
+              aws s3 sync /model/glm46-pruned/ s3://$B/glm46-pruned/ --no-progress 2>&1 | tail -1
+              echo "[job] ===== GLM46_PRUNE_DONE $(date -u) ====="
+          env:
+            - { name: AWS_REGION, value: "eu-north-1" }
+            - { name: TMPDIR, value: "/tmp" }
+          resources:
+            requests: { cpu: "80", memory: 1400Gi }
+          volumeMounts:
+            - { name: model, mountPath: /model }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: model
+          emptyDir: { sizeLimit: 1350Gi }
+        - name: tmp
+          emptyDir: { sizeLimit: 40Gi }
